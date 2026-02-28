@@ -11,36 +11,13 @@ from pathlib import Path
 LOG = logging.getLogger(__name__)
 
 
-def _decode_stderr(stderr: bytes | str | None) -> str:
-    """Decode subprocess stderr safely across platform code pages."""
-    if stderr is None:
-        return ""
-    if isinstance(stderr, bytes):
-        return stderr.decode("utf-8", errors="replace")
-    return stderr
-
-
 def get_whisper_cli_path() -> Path:
     """Get path to whisper-cli binary from env or default."""
     whisper_cpp_dir = os.environ.get(
         "WHISPER_CPP_DIR",
         Path(__file__).resolve().parent.parent / "vendor" / "whisper.cpp",
     )
-    build_bin_dir = Path(whisper_cpp_dir) / "build" / "bin"
-
-    if os.name == "nt":
-        candidates = [
-            build_bin_dir / "Release" / "whisper-cli.exe",
-            build_bin_dir / "whisper-cli.exe",
-        ]
-    else:
-        candidates = [build_bin_dir / "whisper-cli"]
-
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-
-    return candidates[0]
+    return Path(whisper_cpp_dir) / "build" / "bin" / "whisper-cli"
 
 
 def get_model_path() -> Path:
@@ -106,6 +83,7 @@ def _convert_to_temp_16khz_wav(input_file: Path) -> Path:
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
+            text=True,
         )
         if not temp_wav_path.exists() or temp_wav_path.stat().st_size == 0:
             raise RuntimeError(
@@ -114,11 +92,7 @@ def _convert_to_temp_16khz_wav(input_file: Path) -> Path:
     except subprocess.CalledProcessError as exc:
         if temp_wav_path.exists():
             temp_wav_path.unlink()
-        LOG.error(
-            "Failed to convert %s to wav: %s",
-            input_file,
-            _decode_stderr(exc.stderr).strip(),
-        )
+        LOG.error("Failed to convert %s to wav: %s", input_file, exc.stderr.strip())
         raise
     except RuntimeError:
         if temp_wav_path.exists():
@@ -126,11 +100,7 @@ def _convert_to_temp_16khz_wav(input_file: Path) -> Path:
         LOG.error(
             "Failed to convert %s to wav: %s",
             input_file,
-            (
-                _decode_stderr(result.stderr).strip()
-                if "result" in locals()
-                else "unknown ffmpeg error"
-            ),
+            (result.stderr.strip() if "result" in locals() else "unknown ffmpeg error"),
         )
         raise
 
@@ -168,17 +138,14 @@ def _run_autocorrect_cli(file_path: Path) -> bool:
                 check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
+                text=True,
             )
             LOG.info("Applied autocorrect via CLI: %s", file_path)
             return True
         except FileNotFoundError:
             continue
         except subprocess.CalledProcessError as exc:
-            LOG.debug(
-                "Autocorrect CLI variant failed (%s): %s",
-                cmd,
-                _decode_stderr(exc.stderr).strip(),
-            )
+            LOG.debug("Autocorrect CLI variant failed (%s): %s", cmd, exc.stderr)
             continue
 
     return False
