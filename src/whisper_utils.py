@@ -60,15 +60,15 @@ def get_whisper_cli_path() -> Path:
         Path(__file__).resolve().parent.parent / "vendor" / "whisper.cpp",
     )
     base_dir = Path(whisper_cpp_dir).expanduser().resolve()
-    for candidate in _candidate_whisper_cli_paths(base_dir):
+    cli_candidates = _candidate_whisper_cli_paths(base_dir)
+    for candidate in cli_candidates:
         if candidate.exists():
             _ensure_file_readable(candidate, "whisper-cli executable")
             return candidate
 
-    candidates = [str(path) for path in _candidate_whisper_cli_paths(base_dir)]
     raise FileNotFoundError(
         "whisper-cli executable not found. Tried:\n"
-        + "\n".join(candidates)
+        + "\n".join(str(p) for p in cli_candidates)
         + "\nRun setup first or set WHISPER_CLI_PATH."
     )
 
@@ -336,14 +336,15 @@ def run_whisper_command(
     if initial_prompt:
         cmd.extend(["--prompt", initial_prompt])
 
+    output_base_str = str(Path(output_dir) / f"{file_name}_{lang}")
     cmd.extend(
         [
             "--output-srt",
             "--output-file",
-            str(Path(output_dir) / f"{file_name}_{lang}"),
+            output_base_str,
             "--output-txt",
             "--output-file",
-            str(Path(output_dir) / f"{file_name}_{lang}"),
+            output_base_str,
         ]
     )
 
