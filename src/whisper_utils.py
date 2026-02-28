@@ -299,6 +299,15 @@ def run_whisper_command(
     initial_prompt: str | None = None,
     autocorrect: bool = True,
     model_path: str | None = None,
+    threads: int = 8,
+    split_on_word: bool = True,
+    beam_size: int = 5,
+    best_of: int = 5,
+    entropy_thold: float = 2.8,
+    max_context: int = -1,
+    max_len: int = 0,
+    no_gpu: bool = False,
+    no_fallback: bool = False,
 ) -> None:
     """Run whisper command with dynamic output paths."""
     original_input_path = Path(audio_file).resolve()
@@ -318,21 +327,30 @@ def run_whisper_command(
     cmd = [
         str(whisper_cli),
         "-t",
-        "8",
+        str(threads),
         "-m",
         str(resolved_model_path),
         "-f",
         str(input_for_whisper),
         "--language",
         lang,
-        "-sow",
         "--beam-size",
-        "5",
+        str(beam_size),
+        "--best-of",
+        str(best_of),
         "--entropy-thold",
-        "2.8",
+        str(entropy_thold),
         "--max-context",
-        "64",
+        str(max_context),
     ]
+    if split_on_word:
+        cmd.append("-sow")
+    if max_len > 0:
+        cmd.extend(["--max-len", str(max_len)])
+    if no_gpu:
+        cmd.append("--no-gpu")
+    if no_fallback:
+        cmd.append("--no-fallback")
     if initial_prompt:
         cmd.extend(["--prompt", initial_prompt])
 

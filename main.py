@@ -21,11 +21,49 @@ from src.whisper_utils import (
 LOG = logging.getLogger(__name__)
 
 
+def _add_decode_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--decode-profile",
+        type=str,
+        choices=["balanced", "accuracy"],
+        default="balanced",
+        help="Decode preset. accuracy is slower but usually better for hard proper nouns.",
+    )
+
+
+def _resolve_decode_options(args: argparse.Namespace) -> dict[str, int | float | bool]:
+    presets: dict[str, dict[str, int | float | bool]] = {
+        "balanced": {
+            "threads": 8,
+            "split_on_word": True,
+            "beam_size": 5,
+            "best_of": 5,
+            "entropy_thold": 2.8,
+            "max_context": -1,
+            "max_len": 0,
+            "no_gpu": False,
+            "no_fallback": False,
+        },
+        "accuracy": {
+            "threads": 8,
+            "split_on_word": True,
+            "beam_size": 8,
+            "best_of": 8,
+            "entropy_thold": 2.4,
+            "max_context": -1,
+            "max_len": 80,
+            "no_gpu": False,
+            "no_fallback": False,
+        },
+    }
+    return dict(presets[args.decode_profile])
+
+
 def cmd_transcribe(args: argparse.Namespace) -> None:
     output_dir = Path(args.output).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    decode_options = _resolve_decode_options(args)
     initial_prompt: str | None = None
-    selected_model_path: str | None = None
 
     if args.prompt_file:
         prompt_file = Path(args.prompt_file).resolve()
@@ -35,6 +73,7 @@ def cmd_transcribe(args: argparse.Namespace) -> None:
         if not initial_prompt:
             raise ValueError(f"Prompt file is empty: {prompt_file}")
 
+    selected_model_path: str | None = None
     if args.model_path:
         candidate = Path(args.model_path).resolve()
         if not candidate.is_file():
@@ -52,6 +91,7 @@ def cmd_transcribe(args: argparse.Namespace) -> None:
             initial_prompt=initial_prompt,
             autocorrect=not args.no_autocorrect,
             model_path=selected_model_path,
+            **decode_options,
         )
 
 
@@ -142,6 +182,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         help="Absolute/relative path to a GGML model file (overrides --model).",
     )
+    _add_decode_args(transcribe_parser)
     transcribe_parser.set_defaults(func=cmd_transcribe)
 
     convert_parser = subparsers.add_parser(

@@ -50,7 +50,7 @@ wheels = [
 ]
 
 [[package]]
-name = "whisper-cpp-scripts"
+name = "whisper-workbench"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

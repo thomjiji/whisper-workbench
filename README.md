@@ -110,6 +110,9 @@ uv run python main.py transcribe -i audio.wav -o ./output -l en --model turbo
 # Or use an explicit model path (overrides --model)
 uv run python main.py transcribe -i audio.wav -o ./output -l en --model-path /path/to/ggml-large-v3-turbo.bin
 
+# High-accuracy decode preset (slower)
+uv run python main.py transcribe -i audio.wav -o ./output -l zh --model turbo --decode-profile accuracy
+
 # Diagnose local setup (ffmpeg / whisper-cli / model resolution)
 uv run python main.py doctor
 ```
@@ -117,6 +120,11 @@ uv run python main.py doctor
 `transcribe` also accepts non-WAV inputs (for example `.mp3`, `.m4a`, `.mp4`).  
 The tool automatically converts them to temporary 16kHz mono WAV files for whisper-cli, then deletes the temporary WAV files after transcription.
 By default, generated `.txt` and `.srt` are post-processed with `autocorrect-py`.
+
+### Decoding Notes
+
+- `--decode-profile balanced` (default): practical speed/quality.
+- `--decode-profile accuracy`: slower settings for difficult proper nouns.
 
 ### Convert Audio to 16kHz
 
