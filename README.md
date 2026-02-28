@@ -35,6 +35,9 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ### 3. Run the setup script
 
+Setup is implemented by a single cross-platform Python script: `scripts/setup_whisper.py`.
+Wrappers `setup.sh` / `setup.ps1` / `setup.bat` call it.
+
 This will clone whisper.cpp, build it, and download a model (default: `large-v3`):
 
 ```bash
@@ -66,6 +69,12 @@ On Windows (`cmd.exe`):
 setup.bat
 setup.bat --model large-v3-turbo
 setup.bat -m turbo
+```
+
+Direct cross-platform invocation:
+
+```bash
+python scripts/setup_whisper.py --model turbo
 ```
 
 ### 4. Install Python dependencies
@@ -100,6 +109,9 @@ uv run python main.py transcribe -i audio.wav -o ./output -l en --model turbo
 
 # Or use an explicit model path (overrides --model)
 uv run python main.py transcribe -i audio.wav -o ./output -l en --model-path /path/to/ggml-large-v3-turbo.bin
+
+# Diagnose local setup (ffmpeg / whisper-cli / model resolution)
+uv run python main.py doctor
 ```
 
 `transcribe` also accepts non-WAV inputs (for example `.mp3`, `.m4a`, `.mp4`).  
@@ -128,13 +140,15 @@ Override default paths with environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `WHISPER_CLI_PATH` | Auto-detect from PATH or `vendor/whisper.cpp/build/bin` | Path to whisper-cli executable |
 | `WHISPER_CPP_DIR` | `vendor/whisper.cpp` | Path to whisper.cpp installation |
-| `WHISPER_MODEL_PATH` | `vendor/whisper.cpp/models/ggml-large-v3.bin` | Path to GGML model file |
+| `WHISPER_MODEL_PATH` | `vendor/whisper.cpp/models/ggml-large-v3.bin` (falls back to turbo if v3 missing) | Path to GGML model file |
 
 Example:
 
 ```bash
 export WHISPER_CPP_DIR=/opt/whisper.cpp
+export WHISPER_CLI_PATH=/opt/whisper.cpp/build/bin/whisper-cli
 export WHISPER_MODEL_PATH=/opt/models/ggml-large-v3-turbo.bin
 uv run python main.py transcribe -i audio.wav -o ./output
 ```
@@ -147,6 +161,8 @@ whisper-workbench/
 ├── setup.sh                    # Setup whisper.cpp and download model
 ├── setup.ps1                   # Windows PowerShell setup script
 ├── setup.bat                   # Windows cmd wrapper for setup.ps1
+├── scripts/
+│   ├── setup_whisper.py        # Cross-platform setup implementation
 ├── src/
 │   ├── whisper_utils.py        # Shared whisper.cpp helpers
 ├── vendor/                     # whisper.cpp (created by setup scripts)

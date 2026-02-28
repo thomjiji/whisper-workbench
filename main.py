@@ -5,12 +5,15 @@ from __future__ import annotations
 
 import argparse
 import logging
+import shutil
 from pathlib import Path
 
 from src.whisper_utils import (
     batch_run_whisper_command,
     convert_audio_to_16khz,
+    get_model_path,
     get_model_path_by_variant,
+    get_whisper_cli_path,
     list_audio_files,
     run_whisper_command,
 )
@@ -68,6 +71,23 @@ def cmd_batch(args: argparse.Namespace) -> None:
     if not audio_file_paths:
         raise FileNotFoundError(f"No .wav files found in: {base_audio_dir}")
     batch_run_whisper_command(audio_file_paths, base_output_dir)
+
+
+def cmd_doctor(_args: argparse.Namespace) -> None:
+    ffmpeg_path = shutil.which("ffmpeg")
+    print(f"[doctor] ffmpeg: {ffmpeg_path or 'NOT FOUND'}")
+
+    try:
+        whisper_cli_path = get_whisper_cli_path()
+        print(f"[doctor] whisper-cli: {whisper_cli_path}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[doctor] whisper-cli: ERROR ({exc})")
+
+    try:
+        model_path = get_model_path()
+        print(f"[doctor] model: {model_path}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[doctor] model: ERROR ({exc})")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -150,6 +170,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Base directory containing audio/ and output/ subdirectories",
     )
     batch_parser.set_defaults(func=cmd_batch)
+
+    doctor_parser = subparsers.add_parser(
+        "doctor",
+        description="Check required binaries and model path resolution",
+    )
+    doctor_parser.set_defaults(func=cmd_doctor)
 
     return parser
 

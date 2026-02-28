@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -11,25 +12,94 @@ from pathlib import Path
 LOG = logging.getLogger(__name__)
 
 
+def _decode_stderr(stderr: bytes | str | None) -> str:
+    """Decode subprocess stderr safely across platform code pages."""
+    if stderr is None:
+        return ""
+    if isinstance(stderr, bytes):
+        return stderr.decode("utf-8", errors="replace")
+    return stderr
+
+
+def _ensure_file_readable(path: Path, label: str) -> None:
+    if not path.is_file():
+        raise FileNotFoundError(f"{label} not found: {path}")
+    try:
+        with path.open("rb") as file:
+            file.read(1)
+    except OSError as exc:
+        raise PermissionError(f"{label} is not readable: {path}") from exc
+
+
+def _candidate_whisper_cli_paths(base_dir: Path) -> list[Path]:
+    build_bin_dir = base_dir / "build" / "bin"
+    if os.name == "nt":
+        return [
+            build_bin_dir / "Release" / "whisper-cli.exe",
+            build_bin_dir / "RelWithDebInfo" / "whisper-cli.exe",
+            build_bin_dir / "Debug" / "whisper-cli.exe",
+            build_bin_dir / "whisper-cli.exe",
+        ]
+    return [build_bin_dir / "whisper-cli"]
+
+
 def get_whisper_cli_path() -> Path:
-    """Get path to whisper-cli binary from env or default."""
+    """Get path to whisper-cli binary from env, PATH, or local build."""
+    whisper_cli_path = os.environ.get("WHISPER_CLI_PATH")
+    if whisper_cli_path:
+        path = Path(whisper_cli_path).expanduser().resolve()
+        _ensure_file_readable(path, "whisper-cli executable")
+        return path
+
+    whisper_cli_in_path = shutil.which("whisper-cli")
+    if whisper_cli_in_path:
+        return Path(whisper_cli_in_path).resolve()
+
     whisper_cpp_dir = os.environ.get(
         "WHISPER_CPP_DIR",
         Path(__file__).resolve().parent.parent / "vendor" / "whisper.cpp",
     )
-    return Path(whisper_cpp_dir) / "build" / "bin" / "whisper-cli"
+    base_dir = Path(whisper_cpp_dir).expanduser().resolve()
+    for candidate in _candidate_whisper_cli_paths(base_dir):
+        if candidate.exists():
+            _ensure_file_readable(candidate, "whisper-cli executable")
+            return candidate
+
+    candidates = [str(path) for path in _candidate_whisper_cli_paths(base_dir)]
+    raise FileNotFoundError(
+        "whisper-cli executable not found. Tried:\n"
+        + "\n".join(candidates)
+        + "\nRun setup first or set WHISPER_CLI_PATH."
+    )
 
 
 def get_model_path() -> Path:
-    """Get path to whisper model from env or default."""
+    """Get path to whisper model from env or local defaults."""
     model_path = os.environ.get("WHISPER_MODEL_PATH")
     if model_path:
-        return Path(model_path)
+        resolved = Path(model_path).expanduser().resolve()
+        _ensure_file_readable(resolved, "Whisper model file")
+        return resolved
+
     whisper_cpp_dir = os.environ.get(
         "WHISPER_CPP_DIR",
         Path(__file__).resolve().parent.parent / "vendor" / "whisper.cpp",
     )
-    return Path(whisper_cpp_dir) / "models" / "ggml-large-v3.bin"
+    models_dir = Path(whisper_cpp_dir).expanduser().resolve() / "models"
+    candidates = [
+        models_dir / "ggml-large-v3.bin",
+        models_dir / "ggml-large-v3-turbo.bin",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            _ensure_file_readable(candidate, "Whisper model file")
+            return candidate
+
+    raise FileNotFoundError(
+        "No default Whisper model found. Expected one of:\n"
+        + "\n".join(str(path) for path in candidates)
+        + "\nRun setup first, or provide --model/--model-path, or set WHISPER_MODEL_PATH."
+    )
 
 
 def get_model_path_by_variant(model_variant: str) -> Path:
@@ -48,7 +118,9 @@ def get_model_path_by_variant(model_variant: str) -> Path:
             f"Unsupported model variant: {model_variant}. "
             "Use large-v3/v3 or large-v3-turbo/turbo."
         )
-    return Path(whisper_cpp_dir) / "models" / model_name
+    resolved = Path(whisper_cpp_dir).expanduser().resolve() / "models" / model_name
+    _ensure_file_readable(resolved, f"Whisper model file for variant '{model_variant}'")
+    return resolved
 
 
 def remove_16khz_suffix(audio_file: str) -> str:
@@ -83,7 +155,6 @@ def _convert_to_temp_16khz_wav(input_file: Path) -> Path:
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
-            text=True,
         )
         if not temp_wav_path.exists() or temp_wav_path.stat().st_size == 0:
             raise RuntimeError(
@@ -92,7 +163,11 @@ def _convert_to_temp_16khz_wav(input_file: Path) -> Path:
     except subprocess.CalledProcessError as exc:
         if temp_wav_path.exists():
             temp_wav_path.unlink()
-        LOG.error("Failed to convert %s to wav: %s", input_file, exc.stderr.strip())
+        LOG.error(
+            "Failed to convert %s to wav: %s",
+            input_file,
+            _decode_stderr(exc.stderr).strip(),
+        )
         raise
     except RuntimeError:
         if temp_wav_path.exists():
@@ -100,7 +175,11 @@ def _convert_to_temp_16khz_wav(input_file: Path) -> Path:
         LOG.error(
             "Failed to convert %s to wav: %s",
             input_file,
-            (result.stderr.strip() if "result" in locals() else "unknown ffmpeg error"),
+            (
+                _decode_stderr(result.stderr).strip()
+                if "result" in locals()
+                else "unknown ffmpeg error"
+            ),
         )
         raise
 
@@ -138,14 +217,17 @@ def _run_autocorrect_cli(file_path: Path) -> bool:
                 check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
-                text=True,
             )
             LOG.info("Applied autocorrect via CLI: %s", file_path)
             return True
         except FileNotFoundError:
             continue
         except subprocess.CalledProcessError as exc:
-            LOG.debug("Autocorrect CLI variant failed (%s): %s", cmd, exc.stderr)
+            LOG.debug(
+                "Autocorrect CLI variant failed (%s): %s",
+                cmd,
+                _decode_stderr(exc.stderr).strip(),
+            )
             continue
 
     return False
@@ -231,6 +313,7 @@ def run_whisper_command(
 
     whisper_cli = get_whisper_cli_path()
     resolved_model_path = Path(model_path) if model_path else get_model_path()
+    _ensure_file_readable(resolved_model_path, "Whisper model file")
 
     cmd = [
         str(whisper_cli),
@@ -257,15 +340,28 @@ def run_whisper_command(
         [
             "--output-srt",
             "--output-file",
-            f"{output_dir}/{file_name}_{lang}",
+            str(Path(output_dir) / f"{file_name}_{lang}"),
             "--output-txt",
             "--output-file",
-            f"{output_dir}/{file_name}_{lang}",
+            str(Path(output_dir) / f"{file_name}_{lang}"),
         ]
     )
 
     try:
         subprocess.run(cmd, check=True)
+    except OSError as exc:
+        if os.name == "nt" and getattr(exc, "winerror", None) == 4551:
+            raise RuntimeError(
+                "Windows App Control policy blocked whisper-cli. "
+                "Set WHISPER_CLI_PATH to an approved whisper-cli.exe path."
+            ) from exc
+        raise
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            "whisper-cli failed. Verify whisper-cli and model paths are valid/readable. "
+            f"model={resolved_model_path} cli={whisper_cli}"
+        ) from exc
+    else:
         if autocorrect:
             output_base = Path(output_dir) / f"{file_name}_{lang}"
             autocorrect_file_in_place(output_base.with_suffix(".txt"))
