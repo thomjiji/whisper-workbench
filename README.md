@@ -48,6 +48,26 @@ chmod +x setup.sh
 ./setup.sh -m turbo
 ```
 
+On Windows (PowerShell):
+
+```powershell
+.\setup.ps1
+
+# Optional: use large-v3-turbo for faster transcription
+.\setup.ps1 --model large-v3-turbo
+
+# Short form
+.\setup.ps1 -m turbo
+```
+
+On Windows (`cmd.exe`):
+
+```bat
+setup.bat
+setup.bat --model large-v3-turbo
+setup.bat -m turbo
+```
+
 ### 4. Install Python dependencies
 
 ```bash
@@ -125,9 +145,11 @@ uv run python main.py transcribe -i audio.wav -o ./output
 whisper-workbench/
 ├── main.py                     # Unified CLI entry point
 ├── setup.sh                    # Setup whisper.cpp and download model
+├── setup.ps1                   # Windows PowerShell setup script
+├── setup.bat                   # Windows cmd wrapper for setup.ps1
 ├── src/
 │   ├── whisper_utils.py        # Shared whisper.cpp helpers
-├── vendor/                     # whisper.cpp (created by setup.sh)
+├── vendor/                     # whisper.cpp (created by setup scripts)
 ├── pyproject.toml
 ├── uv.lock
 └── README.md
