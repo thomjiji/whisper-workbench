@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -292,6 +293,111 @@ def convert_audio_to_16khz(audio_path: Path) -> None:
             input_file.unlink()
 
 
+def _parse_srt_time_to_ms(value: str) -> int:
+    hhmmss, ms_part = value.split(",")
+    hh, mm, ss = hhmmss.split(":")
+    return (int(hh) * 3600 + int(mm) * 60 + int(ss)) * 1000 + int(ms_part)
+
+
+def _format_ms_to_srt(ms: int) -> str:
+    ms = max(ms, 0)
+    hh = ms // 3_600_000
+    ms %= 3_600_000
+    mm = ms // 60_000
+    ms %= 60_000
+    ss = ms // 1_000
+    ms %= 1_000
+    return f"{hh:02d}:{mm:02d}:{ss:02d},{ms:03d}"
+
+
+def _split_text_on_punctuation(text: str) -> list[str]:
+    chunks: list[str] = []
+    current = ""
+    for ch in text:
+        current += ch
+        if ch in "，。！？；：,.!?;:":
+            piece = current.strip()
+            if piece:
+                chunks.append(piece)
+            current = ""
+    tail = current.strip()
+    if tail:
+        chunks.append(tail)
+    return chunks if chunks else [text.strip()]
+
+
+def _strip_trailing_punctuation(text: str) -> str:
+    """Remove trailing punctuation marks from a subtitle line."""
+    return re.sub(r"[，。！？；：,.!?;:]+$", "", text).strip()
+
+
+def _split_srt_on_punctuation(srt_path: Path) -> None:
+    """Split each SRT segment by punctuation and redistribute timestamps."""
+    if not srt_path.exists():
+        return
+
+    raw = srt_path.read_text(encoding="utf-8", errors="replace").strip()
+    if not raw:
+        return
+
+    blocks = raw.split("\n\n")
+    out_entries: list[tuple[str, str]] = []
+
+    for block in blocks:
+        lines = block.splitlines()
+        if len(lines) < 3:
+            continue
+
+        timing_line = lines[1].strip()
+        if " --> " not in timing_line:
+            continue
+        start_str, end_str = timing_line.split(" --> ")
+        start_ms = _parse_srt_time_to_ms(start_str)
+        end_ms = _parse_srt_time_to_ms(end_str)
+        if end_ms <= start_ms:
+            continue
+
+        text = " ".join(line.strip() for line in lines[2:]).strip()
+        if not text:
+            continue
+
+        pieces = _split_text_on_punctuation(text)
+        if len(pieces) == 1:
+            out_entries.append((timing_line, pieces[0]))
+            continue
+
+        weights = [max(1, len(piece.replace(" ", ""))) for piece in pieces]
+        total = sum(weights)
+        cursor = start_ms
+        for i, piece in enumerate(pieces):
+            piece = _strip_trailing_punctuation(piece)
+            if not piece:
+                continue
+            if i == len(pieces) - 1:
+                piece_end = end_ms
+            else:
+                span = end_ms - start_ms
+                piece_ms = max(1, round(span * weights[i] / total))
+                piece_end = min(end_ms, cursor + piece_ms)
+            out_entries.append(
+                (
+                    f"{_format_ms_to_srt(cursor)} --> {_format_ms_to_srt(piece_end)}",
+                    piece,
+                )
+            )
+            cursor = piece_end
+
+    rendered: list[str] = []
+    for idx, (timing, text) in enumerate(out_entries, start=1):
+        rendered.append(str(idx))
+        rendered.append(timing)
+        rendered.append(text)
+        rendered.append("")
+
+    if rendered:
+        srt_path.write_text("\n".join(rendered), encoding="utf-8")
+
+
 def run_whisper_command(
     audio_file: str,
     lang: str,
@@ -308,6 +414,7 @@ def run_whisper_command(
     max_len: int = 0,
     no_gpu: bool = False,
     no_fallback: bool = False,
+    split_on_punc: bool = False,
 ) -> None:
     """Run whisper command with dynamic output paths."""
     original_input_path = Path(audio_file).resolve()
@@ -381,6 +488,10 @@ def run_whisper_command(
             f"model={resolved_model_path} cli={whisper_cli}"
         ) from exc
     else:
+        if split_on_punc:
+            output_base = Path(output_dir) / f"{file_name}_{lang}"
+            _split_srt_on_punctuation(output_base.with_suffix(".srt"))
+
         if autocorrect:
             output_base = Path(output_dir) / f"{file_name}_{lang}"
             autocorrect_file_in_place(output_base.with_suffix(".txt"))

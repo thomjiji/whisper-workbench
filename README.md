@@ -113,6 +113,12 @@ uv run python main.py transcribe -i audio.wav -o ./output -l en --model-path /pa
 # High-accuracy decode preset (slower)
 uv run python main.py transcribe -i audio.wav -o ./output -l zh --model turbo --decode-profile accuracy
 
+# Legacy preset (backward-compatible with previous default knobs)
+uv run python main.py transcribe -i audio.wav -o ./output -l zh --decode-profile legacy
+
+# Split subtitle lines on punctuation (useful for Chinese readability)
+uv run python main.py transcribe -i audio.wav -o ./output -l zh --split-on-punc
+
 # Diagnose local setup (ffmpeg / whisper-cli / model resolution)
 uv run python main.py doctor
 ```
@@ -125,6 +131,8 @@ By default, generated `.txt` and `.srt` are post-processed with `autocorrect-py`
 
 - `--decode-profile balanced` (default): practical speed/quality.
 - `--decode-profile accuracy`: slower settings for difficult proper nouns.
+- `--decode-profile legacy`: old compatible knobs (`-t 8 -sow --beam-size 5 --entropy-thold 2.8 --max-context 64`).
+- `--split-on-punc`: split generated SRT lines by punctuation and re-assign timings.
 
 ### Convert Audio to 16kHz
 

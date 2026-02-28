@@ -25,9 +25,14 @@ def _add_decode_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--decode-profile",
         type=str,
-        choices=["balanced", "accuracy"],
+        choices=["balanced", "accuracy", "legacy"],
         default="balanced",
-        help="Decode preset. accuracy is slower but usually better for hard proper nouns.",
+        help="Decode preset: balanced|accuracy|legacy(backward-compatible old params).",
+    )
+    parser.add_argument(
+        "--split-on-punc",
+        action="store_true",
+        help="Split generated SRT lines on punctuation and redistribute timestamps.",
     )
 
 
@@ -40,7 +45,7 @@ def _resolve_decode_options(args: argparse.Namespace) -> dict[str, int | float |
             "best_of": 5,
             "entropy_thold": 2.8,
             "max_context": -1,
-            "max_len": 0,
+            # "max_len": 0,
             "no_gpu": False,
             "no_fallback": False,
         },
@@ -52,6 +57,16 @@ def _resolve_decode_options(args: argparse.Namespace) -> dict[str, int | float |
             "entropy_thold": 2.4,
             "max_context": -1,
             "max_len": 80,
+            "no_gpu": False,
+            "no_fallback": False,
+        },
+        "legacy": {
+            "threads": 8,
+            "split_on_word": True,
+            "beam_size": 5,
+            "best_of": 5,
+            "entropy_thold": 2.8,
+            "max_context": 64,
             "no_gpu": False,
             "no_fallback": False,
         },
@@ -91,6 +106,7 @@ def cmd_transcribe(args: argparse.Namespace) -> None:
             initial_prompt=initial_prompt,
             autocorrect=not args.no_autocorrect,
             model_path=selected_model_path,
+            split_on_punc=args.split_on_punc,
             **decode_options,
         )
 
