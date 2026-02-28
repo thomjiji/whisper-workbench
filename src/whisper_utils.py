@@ -379,36 +379,55 @@ def _split_srt_on_punctuation(srt_path: Path) -> None:
         if not text:
             continue
 
-        pieces = _split_text_on_punctuation(text)
+        raw_pieces = _split_text_on_punctuation(text)
+        pieces = [p for p in (_strip_trailing_punctuation(x) for x in raw_pieces) if p]
         if len(pieces) == 1:
-            single = _strip_trailing_punctuation(pieces[0])
+            single = pieces[0]
             if single:
                 out_entries.append((timing_line, single))
             continue
 
         weights = [max(1, len(piece.replace(" ", ""))) for piece in pieces]
         total = sum(weights)
-        cursor = start_ms
+        span = end_ms - start_ms
+        cumulative = 0
         for i, piece in enumerate(pieces):
-            piece = _strip_trailing_punctuation(piece)
-            if not piece:
-                continue
+            piece_start = start_ms + (span * cumulative) // total
+            cumulative += weights[i]
+            piece_end = start_ms + (span * cumulative) // total
             if i == len(pieces) - 1:
                 piece_end = end_ms
-            else:
-                span = end_ms - start_ms
-                piece_ms = max(1, round(span * weights[i] / total))
-                piece_end = min(end_ms, cursor + piece_ms)
+            if piece_end <= piece_start:
+                continue
             out_entries.append(
                 (
-                    f"{_format_ms_to_srt(cursor)} --> {_format_ms_to_srt(piece_end)}",
+                    f"{_format_ms_to_srt(piece_start)} --> {_format_ms_to_srt(piece_end)}",
                     piece,
                 )
             )
-            cursor = piece_end
+
+    # Merge adjacent duplicate text entries when they overlap/touch.
+    deduped: list[tuple[str, str]] = []
+    for timing, text in out_entries:
+        if not deduped:
+            deduped.append((timing, text))
+            continue
+
+        prev_timing, prev_text = deduped[-1]
+        prev_start_s, prev_end_s = prev_timing.split(" --> ")
+        cur_start_s, cur_end_s = timing.split(" --> ")
+        prev_end_ms = _parse_srt_time_to_ms(prev_end_s)
+        cur_start_ms = _parse_srt_time_to_ms(cur_start_s)
+        cur_end_ms = _parse_srt_time_to_ms(cur_end_s)
+
+        if prev_text == text and cur_start_ms <= prev_end_ms + 80:
+            merged_timing = f"{prev_start_s} --> {_format_ms_to_srt(max(prev_end_ms, cur_end_ms))}"
+            deduped[-1] = (merged_timing, prev_text)
+        else:
+            deduped.append((timing, text))
 
     rendered: list[str] = []
-    for idx, (timing, text) in enumerate(out_entries, start=1):
+    for idx, (timing, text) in enumerate(deduped, start=1):
         rendered.append(str(idx))
         rendered.append(timing)
         rendered.append(text)
