@@ -128,6 +128,7 @@ Override default paths with environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `WHISPER_CLI_PATH` | `vendor/whisper.cpp/build/bin/.../whisper-cli(.exe)` or `PATH` | Path to whisper-cli executable |
 | `WHISPER_CPP_DIR` | `vendor/whisper.cpp` | Path to whisper.cpp installation |
 | `WHISPER_MODEL_PATH` | `vendor/whisper.cpp/models/ggml-large-v3.bin` | Path to GGML model file |
 

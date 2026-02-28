@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -21,7 +22,15 @@ def _decode_stderr(stderr: bytes | str | None) -> str:
 
 
 def get_whisper_cli_path() -> Path:
-    """Get path to whisper-cli binary from env or default."""
+    """Get path to whisper-cli binary from env, PATH, or local default."""
+    whisper_cli_path = os.environ.get("WHISPER_CLI_PATH")
+    if whisper_cli_path:
+        return Path(whisper_cli_path)
+
+    whisper_cli_from_path = shutil.which("whisper-cli")
+    if whisper_cli_from_path:
+        return Path(whisper_cli_from_path)
+
     whisper_cpp_dir = os.environ.get(
         "WHISPER_CPP_DIR",
         Path(__file__).resolve().parent.parent / "vendor" / "whisper.cpp",
@@ -299,6 +308,15 @@ def run_whisper_command(
 
     try:
         subprocess.run(cmd, check=True)
+    except OSError as exc:
+        if os.name == "nt" and getattr(exc, "winerror", None) == 4551:
+            raise RuntimeError(
+                "Windows App Control blocked whisper-cli execution. "
+                "Set WHISPER_CLI_PATH to an approved whisper-cli.exe path or "
+                "install whisper-cli in an approved location and ensure it is in PATH."
+            ) from exc
+        raise
+    else:
         if autocorrect:
             output_base = Path(output_dir) / f"{file_name}_{lang}"
             autocorrect_file_in_place(output_base.with_suffix(".txt"))
