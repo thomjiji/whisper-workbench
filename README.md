@@ -133,6 +133,7 @@ By default, generated `.txt` and `.srt` are post-processed with `autocorrect-py`
 - `--decode-profile accuracy`: slower settings for difficult proper nouns.
 - `--decode-profile legacy`: old compatible knobs (`-t 8 -sow --beam-size 5 --entropy-thold 2.8 --max-context 64`).
 - `--split-on-punc`: split generated SRT lines by punctuation and re-assign timings.
+- `balanced`/`accuracy` now also apply a bounded context window to reduce long-range repetition.
 
 ### Convert Audio to 16kHz
 
