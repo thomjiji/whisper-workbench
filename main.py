@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+"""Unified CLI entry point for whisper.cpp transcription workflows."""
+
+from __future__ import annotations
+
+import argparse
+import logging
+from pathlib import Path
+
+from src.whisper_utils import (
+    batch_run_whisper_command,
+    convert_audio_to_16khz,
+    get_model_path_by_variant,
+    list_audio_files,
+    run_whisper_command,
+)
+
+LOG = logging.getLogger(__name__)
+
+
+def cmd_transcribe(args: argparse.Namespace) -> None:
+    output_dir = Path(args.output).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    initial_prompt: str | None = None
+    selected_model_path: str | None = None
+
+    if args.prompt_file:
+        prompt_file = Path(args.prompt_file).resolve()
+        if not prompt_file.is_file():
+            raise FileNotFoundError(f"Prompt file not found: {prompt_file}")
+        initial_prompt = prompt_file.read_text(encoding="utf-8").strip()
+        if not initial_prompt:
+            raise ValueError(f"Prompt file is empty: {prompt_file}")
+
+    if args.model_path:
+        candidate = Path(args.model_path).resolve()
+        if not candidate.is_file():
+            raise FileNotFoundError(f"Model file not found: {candidate}")
+        selected_model_path = str(candidate)
+    elif args.model:
+        selected_model_path = str(get_model_path_by_variant(args.model))
+
+    for audio_file in args.input:
+        audio_path = Path(audio_file).resolve()
+        run_whisper_command(
+            str(audio_path),
+            args.lang,
+            str(output_dir),
+            initial_prompt=initial_prompt,
+            autocorrect=not args.no_autocorrect,
+            model_path=selected_model_path,
+        )
+
+
+def cmd_convert(args: argparse.Namespace) -> None:
+    convert_audio_to_16khz(Path(args.dir))
+
+
+def cmd_batch(args: argparse.Namespace) -> None:
+    base_dir = Path(args.base_dir).resolve()
+    episode_title = args.episode
+
+    base_output_dir = base_dir / "output" / episode_title
+    base_audio_dir = base_dir / "audio" / episode_title
+
+    convert_audio_to_16khz(base_audio_dir)
+    audio_file_paths = list_audio_files(base_audio_dir)
+    if not audio_file_paths:
+        raise FileNotFoundError(f"No .wav files found in: {base_audio_dir}")
+    batch_run_whisper_command(audio_file_paths, base_output_dir)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Unified whisper.cpp transcription workflow CLI"
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    transcribe_parser = subparsers.add_parser(
+        "transcribe", description="Run whisper.cpp on audio files"
+    )
+    transcribe_parser.add_argument(
+        "-i",
+        "--input",
+        type=str,
+        nargs="+",
+        required=True,
+        help="Path to audio file(s) to process.",
+    )
+    transcribe_parser.add_argument(
+        "-o",
+        "--output",
+        type=str,
+        required=True,
+        help="Output directory for transcription files.",
+    )
+    transcribe_parser.add_argument(
+        "-l",
+        "--lang",
+        type=str,
+        default="en",
+        help="Language code (default: en).",
+    )
+    transcribe_parser.add_argument(
+        "--prompt-file",
+        type=str,
+        help="Path to a UTF-8 text file used as the whisper initial prompt.",
+    )
+    transcribe_parser.add_argument(
+        "--no-autocorrect",
+        action="store_true",
+        help="Skip autocorrect post-processing for generated .txt/.srt files.",
+    )
+    transcribe_parser.add_argument(
+        "--model",
+        type=str,
+        choices=["large-v3", "v3", "large-v3-turbo", "turbo"],
+        help="Model variant shortcut (default uses WHISPER_MODEL_PATH or large-v3).",
+    )
+    transcribe_parser.add_argument(
+        "--model-path",
+        type=str,
+        help="Absolute/relative path to a GGML model file (overrides --model).",
+    )
+    transcribe_parser.set_defaults(func=cmd_transcribe)
+
+    convert_parser = subparsers.add_parser(
+        "convert", description="Batch convert .wav files to 16khz mono PCM"
+    )
+    convert_parser.add_argument(
+        "--dir",
+        type=str,
+        required=True,
+        help="Directory containing .wav files",
+    )
+    convert_parser.set_defaults(func=cmd_convert)
+
+    batch_parser = subparsers.add_parser(
+        "batch",
+        description="Convert + transcribe (en/ja)",
+    )
+    batch_parser.add_argument(
+        "-e", "--episode", type=str, required=True, help="Episode title"
+    )
+    batch_parser.add_argument(
+        "-d",
+        "--base-dir",
+        type=str,
+        required=True,
+        help="Base directory containing audio/ and output/ subdirectories",
+    )
+    batch_parser.set_defaults(func=cmd_batch)
+
+    return parser
+
+
+def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(name)s %(levelname)s %(asctime)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    parser = build_parser()
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

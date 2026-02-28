@@ -1,0 +1,11 @@
+**/*.DS_Store
+**/*.wav
+**/*.mp3
+.idea/
+.vscode/
+**/*__pycache__/
+usage/
+.ruff_cache/
+.venv
+test.ipynb
+vendor/

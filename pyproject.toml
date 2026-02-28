@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling>=1.24.2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "whisper-workbench"
+version = "0.1.0"
+description = "Python wrapper scripts for whisper.cpp transcription"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "autocorrect-py",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff",
+]
+
+[project.scripts]
+main = "main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+include = ["main.py"]
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.lint]
+extend-select = [
+    "UP",
+]
