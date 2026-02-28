@@ -44,7 +44,8 @@ def _resolve_decode_options(args: argparse.Namespace) -> dict[str, int | float |
             "beam_size": 5,
             "best_of": 5,
             "entropy_thold": 2.8,
-            "max_context": -1,
+            # Borrow anti-repetition behavior from legacy profile.
+            "max_context": 64,
             # "max_len": 0,
             "no_gpu": False,
             "no_fallback": False,
@@ -54,8 +55,9 @@ def _resolve_decode_options(args: argparse.Namespace) -> dict[str, int | float |
             "split_on_word": True,
             "beam_size": 8,
             "best_of": 8,
-            "entropy_thold": 2.4,
-            "max_context": -1,
+            # Keep accuracy-oriented decoding, but reduce long-context repetition.
+            "entropy_thold": 2.6,
+            "max_context": 96,
             "max_len": 80,
             "no_gpu": False,
             "no_fallback": False,
