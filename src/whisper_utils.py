@@ -234,6 +234,123 @@ def _run_autocorrect_cli(file_path: Path) -> bool:
     return False
 
 
+def _call_claude(prompt: str, model: str = "haiku") -> str:
+    """Call claude -p non-interactively (stdin → stdout) and return the response."""
+    cmd = [
+        "claude", "--print",
+        "--model", model,
+        "--no-session-persistence",
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            input=prompt.encode("utf-8"),
+            capture_output=True,
+            timeout=300,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("claude CLI not found.") from exc
+    if result.returncode != 0:
+        raise RuntimeError(f"claude failed: {_decode_stderr(result.stderr).strip()}")
+    return result.stdout.decode("utf-8", errors="replace").strip()
+
+
+def _llm_correct_lines(
+    lines: list[str],
+    model: str,
+    glossary: str | None = None,
+) -> list[str]:
+    """Use an LLM to fix homophone errors and proper noun inconsistencies."""
+    numbered = "\n".join(f"{i + 1}. {line}" for i, line in enumerate(lines))
+    prompt_parts = [
+        "You are a transcript correction assistant.\n"
+        "Fix: (1) homophone errors 同音字错误 e.g. 之瞎→之下, 在→再\n"
+        "     (2) proper noun forms per glossary 专名统一\n"
+        "Rules 规则:\n"
+        "- Return EXACTLY the same number of lines in the same order"
+        " 返回行数必须与输入完全一致\n"
+        "- Output ONLY the numbered list, no explanations 只输出编号列表，不要解释\n"
+        "- Format: N. corrected text\n"
+        "- Do NOT merge or split lines 不要合并或拆分行\n"
+        "- If a line needs no correction, return it unchanged\n"
+        "- No tool use needed, just output the corrected list directly\n",
+    ]
+    if glossary:
+        prompt_parts.append(f"\nGlossary 词汇表 (use these exact forms):\n{glossary}\n\n---\n\n")
+    prompt_parts.append(numbered)
+    prompt = "".join(prompt_parts)
+
+    raw = _call_claude(prompt, model)
+
+    corrected: dict[int, str] = {}
+    for line in raw.splitlines():
+        m = re.match(r"^(\d+)\.\s*(.*)", line)
+        if m:
+            corrected[int(m.group(1))] = m.group(2)
+
+    if len(corrected) != len(lines):
+        LOG.warning(
+            "LLM returned %d lines but expected %d; falling back to original",
+            len(corrected),
+            len(lines),
+        )
+        return lines
+
+    return [corrected.get(i + 1, lines[i]) for i in range(len(lines))]
+
+
+def llm_correct_file_in_place(
+    file_path: Path,
+    model: str,
+    glossary: str | None = None,
+) -> None:
+    """Apply LLM correction in-place to a .txt or .srt file."""
+    if not file_path.exists():
+        LOG.warning("LLM correct skipped; file not found: %s", file_path)
+        return
+
+    suffix = file_path.suffix.lower()
+
+    if suffix == ".txt":
+        all_lines = file_path.read_text(encoding="utf-8").splitlines()
+        non_empty_indices = [i for i, line in enumerate(all_lines) if line.strip()]
+        if not non_empty_indices:
+            return
+        content_lines = [all_lines[i] for i in non_empty_indices]
+        corrected_lines = _llm_correct_lines(content_lines, model, glossary)
+        for idx, corrected in zip(non_empty_indices, corrected_lines):
+            all_lines[idx] = corrected
+        file_path.write_text("\n".join(all_lines), encoding="utf-8")
+        LOG.info("LLM correction applied to %s", file_path)
+
+    elif suffix == ".srt":
+        raw = file_path.read_text(encoding="utf-8", errors="replace").strip()
+        if not raw:
+            return
+        blocks = raw.split("\n\n")
+        texts: list[str] = []
+        valid_block_indices: list[int] = []
+        for i, block in enumerate(blocks):
+            block_lines = block.splitlines()
+            if len(block_lines) < 3 or " --> " not in block_lines[1]:
+                continue
+            text = " ".join(line.strip() for line in block_lines[2:]).strip()
+            if text:
+                texts.append(text)
+                valid_block_indices.append(i)
+        if not texts:
+            return
+        corrected_texts = _llm_correct_lines(texts, model, glossary)
+        for block_idx, corrected_text in zip(valid_block_indices, corrected_texts):
+            block_lines = blocks[block_idx].splitlines()
+            blocks[block_idx] = "\n".join(block_lines[:2] + [corrected_text])
+        file_path.write_text("\n\n".join(blocks), encoding="utf-8")
+        LOG.info("LLM correction applied to %s", file_path)
+
+    else:
+        LOG.warning("LLM correct: unsupported file type %s, skipping", file_path.suffix)
+
+
 def autocorrect_file_in_place(file_path: Path) -> None:
     """Run autocorrect in-place for a single file if tooling is available."""
     if not file_path.exists():
@@ -454,6 +571,9 @@ def run_whisper_command(
     no_gpu: bool = False,
     no_fallback: bool = False,
     split_on_punc: bool = False,
+    llm_correct: bool = False,
+    llm_model: str = "haiku",
+    llm_glossary: str | None = None,
 ) -> None:
     """Run whisper command with dynamic output paths."""
     original_input_path = Path(audio_file).resolve()
@@ -527,12 +647,13 @@ def run_whisper_command(
             f"model={resolved_model_path} cli={whisper_cli}"
         ) from exc
     else:
+        output_base = Path(output_dir) / f"{file_name}_{lang}"
         if split_on_punc:
-            output_base = Path(output_dir) / f"{file_name}_{lang}"
             _split_srt_on_punctuation(output_base.with_suffix(".srt"))
-
+        if llm_correct:
+            llm_correct_file_in_place(output_base.with_suffix(".txt"), llm_model, llm_glossary)
+            llm_correct_file_in_place(output_base.with_suffix(".srt"), llm_model, llm_glossary)
         if autocorrect:
-            output_base = Path(output_dir) / f"{file_name}_{lang}"
             autocorrect_file_in_place(output_base.with_suffix(".txt"))
             autocorrect_file_in_place(output_base.with_suffix(".srt"))
     finally:

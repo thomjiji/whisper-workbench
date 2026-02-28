@@ -21,6 +21,25 @@ from src.whisper_utils import (
 LOG = logging.getLogger(__name__)
 
 
+def _add_llm_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--llm-correct",
+        action="store_true",
+        help="Run Codex CLI post-correction to fix homophones and proper nouns.",
+    )
+    parser.add_argument(
+        "--llm-model",
+        type=str,
+        default="haiku",
+        help="Claude model alias or full ID for LLM correction (default: haiku).",
+    )
+    parser.add_argument(
+        "--glossary-file",
+        type=str,
+        help="Path to a UTF-8 file with one proper noun per line for LLM correction.",
+    )
+
+
 def _add_decode_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--decode-profile",
@@ -99,6 +118,13 @@ def cmd_transcribe(args: argparse.Namespace) -> None:
     elif args.model:
         selected_model_path = str(get_model_path_by_variant(args.model))
 
+    llm_glossary: str | None = None
+    if args.llm_correct and args.glossary_file:
+        glossary_path = Path(args.glossary_file).resolve()
+        if not glossary_path.is_file():
+            raise FileNotFoundError(f"Glossary file not found: {glossary_path}")
+        llm_glossary = glossary_path.read_text(encoding="utf-8")
+
     for audio_file in args.input:
         audio_path = Path(audio_file).resolve()
         run_whisper_command(
@@ -109,6 +135,9 @@ def cmd_transcribe(args: argparse.Namespace) -> None:
             autocorrect=not args.no_autocorrect,
             model_path=selected_model_path,
             split_on_punc=args.split_on_punc,
+            llm_correct=args.llm_correct,
+            llm_model=args.llm_model,
+            llm_glossary=llm_glossary,
             **decode_options,
         )
 
@@ -201,6 +230,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Absolute/relative path to a GGML model file (overrides --model).",
     )
     _add_decode_args(transcribe_parser)
+    _add_llm_args(transcribe_parser)
     transcribe_parser.set_defaults(func=cmd_transcribe)
 
     convert_parser = subparsers.add_parser(
