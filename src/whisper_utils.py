@@ -313,9 +313,27 @@ def _format_ms_to_srt(ms: int) -> str:
 def _split_text_on_punctuation(text: str) -> list[str]:
     chunks: list[str] = []
     current = ""
-    for ch in text:
+    for i, ch in enumerate(text):
         current += ch
-        if ch in "，。！？；：,.!?;:":
+
+        should_split = False
+        prev_ch = text[i - 1] if i > 0 else ""
+        next_ch = text[i + 1] if i + 1 < len(text) else ""
+
+        if ch in "，。！？；：":
+            should_split = True
+        elif ch in "!?;:":
+            should_split = True
+        elif ch == ",":
+            # Keep numeric groups intact: 1,000 / 2024,12
+            should_split = not (prev_ch.isdigit() and next_ch.isdigit())
+        elif ch == ".":
+            # Do not split decimals or dot-connected tokens: 1.0 / e.g. / U.S.
+            is_decimal = prev_ch.isdigit() and next_ch.isdigit()
+            is_dot_token = prev_ch.isalpha() and next_ch.isalpha()
+            should_split = not (is_decimal or is_dot_token)
+
+        if should_split:
             piece = current.strip()
             if piece:
                 chunks.append(piece)
@@ -363,7 +381,9 @@ def _split_srt_on_punctuation(srt_path: Path) -> None:
 
         pieces = _split_text_on_punctuation(text)
         if len(pieces) == 1:
-            out_entries.append((timing_line, pieces[0]))
+            single = _strip_trailing_punctuation(pieces[0])
+            if single:
+                out_entries.append((timing_line, single))
             continue
 
         weights = [max(1, len(piece.replace(" ", ""))) for piece in pieces]
