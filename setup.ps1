@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$SetupScript = Join-Path $ProjectRoot 'scripts\setup_whisper.py'
+$SetupScript = Join-Path $ProjectRoot 'scripts\setup_whisper_cpp.py'
 
 $Python = $null
 $PyLauncher = Get-Command py -ErrorAction SilentlyContinue

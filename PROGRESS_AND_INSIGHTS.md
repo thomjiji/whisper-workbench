@@ -8,7 +8,7 @@ This document summarizes the cross-platform setup/transcription improvements, su
    - `setup.ps1` + `setup.bat`
    - README usage updates for Windows.
 2. Reverted two earlier Windows hotfix commits on request, then performed a broader cross-platform refactor:
-   - Unified setup implementation through `scripts/setup_whisper.py`.
+   - Unified setup implementation through `scripts/setup_whisper_cpp.py`.
    - `setup.sh` / `setup.ps1` became wrappers.
    - Added `doctor` command for environment checks.
 3. Added and iterated decoding controls:

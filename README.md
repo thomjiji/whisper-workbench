@@ -35,7 +35,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ### 3. Run the setup script
 
-Setup is implemented by a single cross-platform Python script: `scripts/setup_whisper.py`.
+Setup is implemented by a single cross-platform Python script: `scripts/setup_whisper_cpp.py`.
 Wrappers `setup.sh` / `setup.ps1` / `setup.bat` call it.
 
 This will clone whisper.cpp, build it, and download a model (default: `large-v3`):
@@ -84,9 +84,9 @@ setup.bat -m turbo
 Direct cross-platform invocation:
 
 ```bash
-python scripts/setup_whisper.py --model turbo
-python scripts/setup_whisper.py --model medium
-python scripts/setup_whisper.py --model small
+python scripts/setup_whisper_cpp.py --model turbo
+python scripts/setup_whisper_cpp.py --model medium
+python scripts/setup_whisper_cpp.py --model small
 ```
 
 ### 4. Install Python dependencies
@@ -191,7 +191,10 @@ whisper-workbench/
 ├── setup.ps1                   # Windows PowerShell setup script
 ├── setup.bat                   # Windows cmd wrapper for setup.ps1
 ├── scripts/
-│   ├── setup_whisper.py        # Cross-platform setup implementation
+│   ├── setup_whisper_cpp.py            # Cross-platform whisper.cpp setup
+│   ├── audio_trim_silence.py           # Trim silence from an audio file via ffmpeg
+│   ├── sync_srt_to_txt.py              # Sync SRT text lines into TXT (with line-count check)
+│   ├── sync_txt_to_srt.py              # Sync TXT corrected lines back into SRT (with line-count check)
 ├── src/
 │   ├── whisper_utils.py        # Shared whisper.cpp helpers
 ├── vendor/                     # whisper.cpp (created by setup scripts)

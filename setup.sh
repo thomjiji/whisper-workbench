@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SETUP_PY="$PROJECT_ROOT/scripts/setup_whisper.py"
+SETUP_PY="$PROJECT_ROOT/scripts/setup_whisper_cpp.py"
 
 if command -v python3 >/dev/null 2>&1; then
     PYTHON_BIN="python3"
