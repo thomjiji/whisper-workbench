@@ -466,14 +466,21 @@ def _strip_trailing_punctuation(text: str) -> str:
     return re.sub(r"[，。！？；：,.!?;:]+$", "", text).strip()
 
 
-def _split_srt_on_punctuation(srt_path: Path) -> None:
+def _rewrite_txt_from_lines(txt_path: Path, lines: list[str]) -> None:
+    """Rewrite TXT as one line per subtitle segment to keep 1:1 mapping with SRT."""
+    if not lines:
+        return
+    txt_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _split_srt_on_punctuation(srt_path: Path) -> list[str]:
     """Split each SRT segment by punctuation and redistribute timestamps."""
     if not srt_path.exists():
-        return
+        return []
 
     raw = srt_path.read_text(encoding="utf-8", errors="replace").strip()
     if not raw:
-        return
+        return []
 
     blocks = raw.split("\n\n")
     out_entries: list[tuple[str, str]] = []
@@ -552,6 +559,7 @@ def _split_srt_on_punctuation(srt_path: Path) -> None:
 
     if rendered:
         srt_path.write_text("\n".join(rendered), encoding="utf-8")
+    return [text for _, text in deduped]
 
 
 def run_whisper_command(
@@ -649,7 +657,8 @@ def run_whisper_command(
     else:
         output_base = Path(output_dir) / f"{file_name}_{lang}"
         if split_on_punc:
-            _split_srt_on_punctuation(output_base.with_suffix(".srt"))
+            split_lines = _split_srt_on_punctuation(output_base.with_suffix(".srt"))
+            _rewrite_txt_from_lines(output_base.with_suffix(".txt"), split_lines)
         if llm_correct:
             llm_correct_file_in_place(output_base.with_suffix(".txt"), llm_model, llm_glossary)
             llm_correct_file_in_place(output_base.with_suffix(".srt"), llm_model, llm_glossary)

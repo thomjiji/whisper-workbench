@@ -12,13 +12,24 @@ from pathlib import Path
 
 def normalize_model(model: str) -> tuple[str, str]:
     normalized = model.strip().lower()
-    if normalized in {"large-v3", "v3"}:
-        return "large-v3", "ggml-large-v3.bin"
-    if normalized in {"large-v3-turbo", "turbo"}:
-        return "large-v3-turbo", "ggml-large-v3-turbo.bin"
-    raise ValueError(
-        f"unsupported model '{model}' (use large-v3/v3 or large-v3-turbo/turbo)"
-    )
+    aliases: dict[str, str] = {
+        "large-v3": "large-v3",
+        "v3": "large-v3",
+        "large-v3-turbo": "large-v3-turbo",
+        "turbo": "large-v3-turbo",
+        "medium": "medium",
+        "medium.en": "medium.en",
+        "small": "small",
+        "small.en": "small.en",
+    }
+    model_variant = aliases.get(normalized)
+    if not model_variant:
+        raise ValueError(
+            "unsupported model "
+            f"'{model}' "
+            "(use large-v3/v3, large-v3-turbo/turbo, medium[/medium.en], small[/small.en])"
+        )
+    return model_variant, f"ggml-{model_variant}.bin"
 
 
 def run(cmd: list[str], cwd: Path | None = None) -> None:
@@ -52,7 +63,10 @@ def main() -> int:
         "--model",
         "-m",
         default="large-v3",
-        help="Whisper model variant: large-v3|v3|large-v3-turbo|turbo",
+        help=(
+            "Whisper model variant: "
+            "large-v3|v3|large-v3-turbo|turbo|medium|medium.en|small|small.en"
+        ),
     )
     parser.add_argument(
         "--skip-update",

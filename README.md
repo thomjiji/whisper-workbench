@@ -47,6 +47,10 @@ chmod +x setup.sh
 # Optional: use large-v3-turbo for faster transcription
 ./setup.sh --model large-v3-turbo
 
+# Optional: use smaller models
+./setup.sh --model medium
+./setup.sh --model small
+
 # Short form
 ./setup.sh -m turbo
 ```
@@ -59,6 +63,10 @@ On Windows (PowerShell):
 # Optional: use large-v3-turbo for faster transcription
 .\setup.ps1 --model large-v3-turbo
 
+# Optional: use smaller models
+.\setup.ps1 --model medium
+.\setup.ps1 --model small
+
 # Short form
 .\setup.ps1 -m turbo
 ```
@@ -68,6 +76,8 @@ On Windows (`cmd.exe`):
 ```bat
 setup.bat
 setup.bat --model large-v3-turbo
+setup.bat --model medium
+setup.bat --model small
 setup.bat -m turbo
 ```
 
@@ -75,6 +85,8 @@ Direct cross-platform invocation:
 
 ```bash
 python scripts/setup_whisper.py --model turbo
+python scripts/setup_whisper.py --model medium
+python scripts/setup_whisper.py --model small
 ```
 
 ### 4. Install Python dependencies
@@ -132,7 +144,7 @@ By default, generated `.txt` and `.srt` are post-processed with `autocorrect-py`
 - `--decode-profile balanced` (default): practical speed/quality.
 - `--decode-profile accuracy`: slower settings for difficult proper nouns.
 - `--decode-profile legacy`: old compatible knobs (`-t 8 -sow --beam-size 5 --entropy-thold 2.8 --max-context 64`).
-- `--split-on-punc`: split generated SRT lines by punctuation and re-assign timings.
+- `--split-on-punc`: split generated SRT lines by punctuation, re-assign timings, and rewrite TXT to one line per SRT segment (for easy 1:1 mapping).
 - `balanced`/`accuracy` now also apply a bounded context window to reduce long-range repetition.
 
 ### Convert Audio to 16kHz
