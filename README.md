@@ -1,10 +1,11 @@
 # whisper-workbench
 
-Python wrapper scripts for [whisper.cpp](https://github.com/ggerganov/whisper.cpp) that streamline audio transcription workflows.
+Python wrapper scripts for local [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and Groq Whisper API transcription workflows.
 
 ## Features
 
-- Batch transcription of audio files using whisper.cpp
+- Batch transcription of audio files using local whisper.cpp
+- Optional remote transcription backend via Groq Whisper API
 - Automatic audio conversion to 16kHz mono WAV (required by whisper.cpp)
 - SRT and TXT subtitle output
 - Optional initial prompt injection (`--prompt-file`) for whisper-cli
@@ -15,8 +16,9 @@ Python wrapper scripts for [whisper.cpp](https://github.com/ggerganov/whisper.cp
 - **Python 3.12+**
 - **uv** - Python package/env manager
 - **ffmpeg** - for audio conversion
-- **whisper.cpp** - the transcription engine (setup script provided)
+- **whisper.cpp** - local transcription engine (setup script provided)
 - **CMake** - for building whisper.cpp
+- **Groq API key** - required only for `--backend groq`
 
 ## Setup
 
@@ -116,14 +118,14 @@ uv run python main.py transcribe -i audio.wav -o ./output -l en --prompt-file ./
 # Disable autocorrect post-processing
 uv run python main.py transcribe -i audio.wav -o ./output -l en --no-autocorrect
 
-# Select model variant shortcut
-uv run python main.py transcribe -i audio.wav -o ./output -l en --model turbo
+# Use local backend with a model variant shortcut
+uv run python main.py transcribe -i audio.wav -o ./output -l en --backend local --local-model turbo
 
-# Or use an explicit model path (overrides --model)
-uv run python main.py transcribe -i audio.wav -o ./output -l en --model-path /path/to/ggml-large-v3-turbo.bin
+# Or use an explicit local model path
+uv run python main.py transcribe -i audio.wav -o ./output -l en --backend local --local-model-path /path/to/ggml-large-v3-turbo.bin
 
 # High-accuracy decode preset (slower)
-uv run python main.py transcribe -i audio.wav -o ./output -l zh --model turbo --decode-profile accuracy
+uv run python main.py transcribe -i audio.wav -o ./output -l zh --backend local --local-model turbo --decode-profile accuracy
 
 # Legacy preset (backward-compatible with previous default knobs)
 uv run python main.py transcribe -i audio.wav -o ./output -l zh --decode-profile legacy
@@ -131,19 +133,24 @@ uv run python main.py transcribe -i audio.wav -o ./output -l zh --decode-profile
 # Split subtitle lines on punctuation (useful for Chinese readability)
 uv run python main.py transcribe -i audio.wav -o ./output -l zh --split-on-punc
 
-# Diagnose local setup (ffmpeg / whisper-cli / model resolution)
+# Use Groq backend (requires GROQ_API_KEY)
+uv run python main.py transcribe -i audio.wav -o ./output -l zh --backend groq
+
+# Diagnose backend setup
 uv run python main.py doctor
+uv run python main.py doctor --backend groq
 ```
 
 `transcribe` also accepts non-WAV inputs (for example `.mp3`, `.m4a`, `.mp4`).  
-The tool automatically converts them to temporary 16kHz mono WAV files for whisper-cli, then deletes the temporary WAV files after transcription.
+With `--backend local`, files are converted to temporary 16kHz mono WAV for whisper-cli and cleaned up after transcription.  
+With `--backend groq`, the original input file is uploaded directly to Groq.
 By default, generated `.txt` and `.srt` are post-processed with `autocorrect-py`.
 
 ### Decoding Notes
 
-- `--decode-profile balanced` (default): practical speed/quality.
-- `--decode-profile accuracy`: slower settings for difficult proper nouns.
-- `--decode-profile legacy`: old compatible knobs (`-t 8 -sow --beam-size 5 --entropy-thold 2.8 --max-context 64`).
+- `--decode-profile balanced` (default local profile): practical speed/quality.
+- `--decode-profile accuracy` (local): slower settings for difficult proper nouns.
+- `--decode-profile legacy` (local): old compatible knobs (`-t 8 -sow --beam-size 5 --entropy-thold 2.8 --max-context 64`).
 - `--split-on-punc`: split generated SRT lines by punctuation, re-assign timings, and rewrite TXT to one line per SRT segment (for easy 1:1 mapping).
 - `balanced`/`accuracy` now also apply a bounded context window to reduce long-range repetition.
 
@@ -169,6 +176,7 @@ Override default paths with environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `GROQ_API_KEY` | (unset) | API key used when `--backend groq` |
 | `WHISPER_CLI_PATH` | Auto-detect from PATH or `vendor/whisper.cpp/build/bin` | Path to whisper-cli executable |
 | `WHISPER_CPP_DIR` | `vendor/whisper.cpp` | Path to whisper.cpp installation |
 | `WHISPER_MODEL_PATH` | `vendor/whisper.cpp/models/ggml-large-v3.bin` (falls back to turbo if v3 missing) | Path to GGML model file |
@@ -179,7 +187,8 @@ Example:
 export WHISPER_CPP_DIR=/opt/whisper.cpp
 export WHISPER_CLI_PATH=/opt/whisper.cpp/build/bin/whisper-cli
 export WHISPER_MODEL_PATH=/opt/models/ggml-large-v3-turbo.bin
-uv run python main.py transcribe -i audio.wav -o ./output
+export GROQ_API_KEY=your_groq_api_key
+uv run python main.py transcribe -i audio.wav -o ./output --backend groq
 ```
 
 ## Project Structure
@@ -197,6 +206,7 @@ whisper-workbench/
 │   ├── sync_txt_to_srt.py              # Sync TXT corrected lines back into SRT (with line-count check)
 ├── src/
 │   ├── whisper_utils.py        # Shared whisper.cpp helpers
+│   ├── transcription_backends.py # Local/Groq backend implementations
 ├── vendor/                     # whisper.cpp (created by setup scripts)
 ├── pyproject.toml
 ├── uv.lock

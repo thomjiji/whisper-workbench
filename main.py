@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
-"""Unified CLI entry point for whisper.cpp transcription workflows."""
+"""Unified CLI entry point for local/Groq transcription workflows."""
 
 from __future__ import annotations
 
 import argparse
 import logging
+import os
 import shutil
 from pathlib import Path
 
+from src.transcription_backends import (
+    GroqWhisperBackend,
+    LocalWhisperCppBackend,
+    TranscribeRequest,
+)
 from src.whisper_utils import (
     batch_run_whisper_command,
     convert_audio_to_16khz,
@@ -15,7 +21,6 @@ from src.whisper_utils import (
     get_model_path_by_variant,
     get_whisper_cli_path,
     list_audio_files,
-    run_whisper_command,
 )
 
 LOG = logging.getLogger(__name__)
@@ -40,14 +45,16 @@ def _add_llm_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _add_decode_args(parser: argparse.ArgumentParser) -> None:
+def _add_backend_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--decode-profile",
-        type=str,
-        choices=["balanced", "accuracy", "legacy"],
-        default="balanced",
-        help="Decode preset: balanced|accuracy|legacy(backward-compatible old params).",
+        "--backend",
+        choices=["local", "groq"],
+        default="local",
+        help="Transcription backend to use (default: local).",
     )
+
+
+def _add_common_transcribe_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--split-on-punc",
         action="store_true",
@@ -55,7 +62,54 @@ def _add_decode_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _resolve_decode_options(args: argparse.Namespace) -> dict[str, int | float | bool]:
+def _add_local_backend_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--local-model",
+        type=str,
+        choices=[
+            "large-v3",
+            "v3",
+            "large-v3-turbo",
+            "turbo",
+            "medium",
+            "medium.en",
+            "small",
+            "small.en",
+        ],
+        default=None,
+        help="Local whisper.cpp model variant shortcut.",
+    )
+    parser.add_argument(
+        "--local-model-path",
+        type=str,
+        default=None,
+        help="Absolute/relative path to a local GGML model file.",
+    )
+    parser.add_argument(
+        "--decode-profile",
+        type=str,
+        choices=["balanced", "accuracy", "legacy"],
+        default=None,
+        help="Decode preset for local backend: balanced|accuracy|legacy.",
+    )
+
+
+def _add_groq_backend_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--groq-model",
+        type=str,
+        default=None,
+        help="Groq model name (default: whisper-large-v3-turbo).",
+    )
+    parser.add_argument(
+        "--groq-timeout-sec",
+        type=int,
+        default=None,
+        help="Groq request timeout in seconds (default: 300).",
+    )
+
+
+def _resolve_decode_options(decode_profile: str) -> dict[str, int | float | bool]:
     presets: dict[str, dict[str, int | float | bool]] = {
         "balanced": {
             "threads": 8,
@@ -63,9 +117,7 @@ def _resolve_decode_options(args: argparse.Namespace) -> dict[str, int | float |
             "beam_size": 5,
             "best_of": 5,
             "entropy_thold": 2.8,
-            # Borrow anti-repetition behavior from legacy profile.
             "max_context": 64,
-            # "max_len": 0,
             "no_gpu": False,
             "no_fallback": False,
         },
@@ -74,7 +126,6 @@ def _resolve_decode_options(args: argparse.Namespace) -> dict[str, int | float |
             "split_on_word": True,
             "beam_size": 8,
             "best_of": 8,
-            # Keep accuracy-oriented decoding, but reduce long-context repetition.
             "entropy_thold": 2.6,
             "max_context": 96,
             "max_len": 80,
@@ -92,15 +143,32 @@ def _resolve_decode_options(args: argparse.Namespace) -> dict[str, int | float |
             "no_fallback": False,
         },
     }
-    return dict(presets[args.decode_profile])
+    return dict(presets[decode_profile])
+
+
+def _validate_backend_args(args: argparse.Namespace) -> None:
+    if args.backend == "groq":
+        if args.local_model is not None or args.local_model_path is not None:
+            raise ValueError(
+                "--local-model/--local-model-path are only valid with --backend local."
+            )
+        if args.decode_profile is not None:
+            raise ValueError("--decode-profile is only valid with --backend local.")
+        if not os.environ.get("GROQ_API_KEY"):
+            raise RuntimeError("GROQ_API_KEY is required when using --backend groq.")
+    elif args.backend == "local":
+        if args.groq_model is not None or args.groq_timeout_sec is not None:
+            raise ValueError(
+                "--groq-model/--groq-timeout-sec are only valid with --backend groq."
+            )
 
 
 def cmd_transcribe(args: argparse.Namespace) -> None:
     output_dir = Path(args.output).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    decode_options = _resolve_decode_options(args)
-    initial_prompt: str | None = None
+    _validate_backend_args(args)
 
+    initial_prompt: str | None = None
     if args.prompt_file:
         prompt_file = Path(args.prompt_file).resolve()
         if not prompt_file.is_file():
@@ -109,15 +177,6 @@ def cmd_transcribe(args: argparse.Namespace) -> None:
         if not initial_prompt:
             raise ValueError(f"Prompt file is empty: {prompt_file}")
 
-    selected_model_path: str | None = None
-    if args.model_path:
-        candidate = Path(args.model_path).resolve()
-        if not candidate.is_file():
-            raise FileNotFoundError(f"Model file not found: {candidate}")
-        selected_model_path = str(candidate)
-    elif args.model:
-        selected_model_path = str(get_model_path_by_variant(args.model))
-
     llm_glossary: str | None = None
     if args.llm_correct and args.glossary_file:
         glossary_path = Path(args.glossary_file).resolve()
@@ -125,20 +184,46 @@ def cmd_transcribe(args: argparse.Namespace) -> None:
             raise FileNotFoundError(f"Glossary file not found: {glossary_path}")
         llm_glossary = glossary_path.read_text(encoding="utf-8")
 
+    backend = LocalWhisperCppBackend() if args.backend == "local" else GroqWhisperBackend()
+
+    selected_model_path: str | None = None
+    decode_options: dict[str, int | float | bool] | None = None
+    groq_model = args.groq_model or "whisper-large-v3-turbo"
+    groq_timeout_sec = args.groq_timeout_sec or 300
+
+    if args.backend == "local":
+        if args.local_model_path:
+            candidate = Path(args.local_model_path).resolve()
+            if not candidate.is_file():
+                raise FileNotFoundError(f"Model file not found: {candidate}")
+            selected_model_path = str(candidate)
+        elif args.local_model:
+            selected_model_path = str(get_model_path_by_variant(args.local_model))
+
+        decode_profile = args.decode_profile or "balanced"
+        decode_options = _resolve_decode_options(decode_profile)
+
     for audio_file in args.input:
         audio_path = Path(audio_file).resolve()
-        run_whisper_command(
-            str(audio_path),
-            args.lang,
-            str(output_dir),
-            initial_prompt=initial_prompt,
-            autocorrect=not args.no_autocorrect,
-            model_path=selected_model_path,
-            split_on_punc=args.split_on_punc,
-            llm_correct=args.llm_correct,
-            llm_model=args.llm_model,
-            llm_glossary=llm_glossary,
-            **decode_options,
+        if not audio_path.is_file():
+            raise FileNotFoundError(f"Input file not found: {audio_path}")
+
+        backend.transcribe(
+            TranscribeRequest(
+                audio_file=audio_path,
+                output_dir=output_dir,
+                lang=args.lang,
+                initial_prompt=initial_prompt,
+                autocorrect=not args.no_autocorrect,
+                split_on_punc=args.split_on_punc,
+                llm_correct=args.llm_correct,
+                llm_model=args.llm_model,
+                llm_glossary=llm_glossary,
+                local_model_path=selected_model_path,
+                decode_options=decode_options,
+                groq_model=groq_model,
+                groq_timeout_sec=groq_timeout_sec,
+            )
         )
 
 
@@ -160,31 +245,39 @@ def cmd_batch(args: argparse.Namespace) -> None:
     batch_run_whisper_command(audio_file_paths, base_output_dir)
 
 
-def cmd_doctor(_args: argparse.Namespace) -> None:
+def cmd_doctor(args: argparse.Namespace) -> None:
     ffmpeg_path = shutil.which("ffmpeg")
     print(f"[doctor] ffmpeg: {ffmpeg_path or 'NOT FOUND'}")
 
-    try:
-        whisper_cli_path = get_whisper_cli_path()
-        print(f"[doctor] whisper-cli: {whisper_cli_path}")
-    except Exception as exc:  # noqa: BLE001
-        print(f"[doctor] whisper-cli: ERROR ({exc})")
+    if args.backend in {"local", "all"}:
+        try:
+            whisper_cli_path = get_whisper_cli_path()
+            print(f"[doctor] whisper-cli: {whisper_cli_path}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[doctor] whisper-cli: ERROR ({exc})")
 
-    try:
-        model_path = get_model_path()
-        print(f"[doctor] model: {model_path}")
-    except Exception as exc:  # noqa: BLE001
-        print(f"[doctor] model: ERROR ({exc})")
+        try:
+            model_path = get_model_path()
+            print(f"[doctor] model: {model_path}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[doctor] model: ERROR ({exc})")
+
+    if args.backend in {"groq", "all"}:
+        print(
+            "[doctor] GROQ_API_KEY: "
+            + ("SET" if os.environ.get("GROQ_API_KEY") else "NOT SET")
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Unified whisper.cpp transcription workflow CLI"
+        description="Unified transcription workflow CLI (local whisper.cpp + Groq)"
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     transcribe_parser = subparsers.add_parser(
-        "transcribe", description="Run whisper.cpp on audio files"
+        "transcribe",
+        description="Transcribe audio files via local whisper.cpp or Groq backend",
     )
     transcribe_parser.add_argument(
         "-i",
@@ -211,25 +304,17 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe_parser.add_argument(
         "--prompt-file",
         type=str,
-        help="Path to a UTF-8 text file used as the whisper initial prompt.",
+        help="Path to a UTF-8 text file used as the initial prompt.",
     )
     transcribe_parser.add_argument(
         "--no-autocorrect",
         action="store_true",
         help="Skip autocorrect post-processing for generated .txt/.srt files.",
     )
-    transcribe_parser.add_argument(
-        "--model",
-        type=str,
-        choices=["large-v3", "v3", "large-v3-turbo", "turbo"],
-        help="Model variant shortcut (default uses WHISPER_MODEL_PATH or large-v3).",
-    )
-    transcribe_parser.add_argument(
-        "--model-path",
-        type=str,
-        help="Absolute/relative path to a GGML model file (overrides --model).",
-    )
-    _add_decode_args(transcribe_parser)
+    _add_backend_args(transcribe_parser)
+    _add_local_backend_args(transcribe_parser)
+    _add_groq_backend_args(transcribe_parser)
+    _add_common_transcribe_args(transcribe_parser)
     _add_llm_args(transcribe_parser)
     transcribe_parser.set_defaults(func=cmd_transcribe)
 
@@ -246,7 +331,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     batch_parser = subparsers.add_parser(
         "batch",
-        description="Convert + transcribe (en/ja)",
+        description="Convert + transcribe (en/ja) using local backend",
     )
     batch_parser.add_argument(
         "-e", "--episode", type=str, required=True, help="Episode title"
@@ -262,7 +347,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor_parser = subparsers.add_parser(
         "doctor",
-        description="Check required binaries and model path resolution",
+        description="Check backend prerequisites (ffmpeg/local/groq)",
+    )
+    doctor_parser.add_argument(
+        "--backend",
+        choices=["all", "local", "groq"],
+        default="all",
+        help="Select which backend checks to run (default: all).",
     )
     doctor_parser.set_defaults(func=cmd_doctor)
 

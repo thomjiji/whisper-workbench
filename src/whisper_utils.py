@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Any
 
 LOG = logging.getLogger(__name__)
 
@@ -114,10 +115,18 @@ def get_model_path_by_variant(model_variant: str) -> Path:
         model_name = "ggml-large-v3.bin"
     elif normalized in {"large-v3-turbo", "turbo"}:
         model_name = "ggml-large-v3-turbo.bin"
+    elif normalized == "medium":
+        model_name = "ggml-medium.bin"
+    elif normalized == "medium.en":
+        model_name = "ggml-medium.en.bin"
+    elif normalized == "small":
+        model_name = "ggml-small.bin"
+    elif normalized == "small.en":
+        model_name = "ggml-small.en.bin"
     else:
         raise ValueError(
             f"Unsupported model variant: {model_variant}. "
-            "Use large-v3/v3 or large-v3-turbo/turbo."
+            "Use large-v3/v3, large-v3-turbo/turbo, medium[/medium.en], or small[/small.en]."
         )
     resolved = Path(whisper_cpp_dir).expanduser().resolve() / "models" / model_name
     _ensure_file_readable(resolved, f"Whisper model file for variant '{model_variant}'")
@@ -562,6 +571,64 @@ def _split_srt_on_punctuation(srt_path: Path) -> list[str]:
     return [text for _, text in deduped]
 
 
+def _normalize_segment_text(segment: dict[str, Any]) -> str:
+    text = str(segment.get("text", "")).strip()
+    return re.sub(r"\s+", " ", text)
+
+
+def write_srt_txt_from_segments(output_base: Path, segments: list[dict[str, Any]]) -> None:
+    """Write SRT and TXT files from transcription segments."""
+    if not segments:
+        raise ValueError("No transcription segments available to render outputs.")
+
+    srt_lines: list[str] = []
+    txt_lines: list[str] = []
+    segment_index = 1
+
+    for segment in segments:
+        text = _normalize_segment_text(segment)
+        if not text:
+            continue
+
+        start_s = float(segment.get("start", 0.0))
+        end_s = float(segment.get("end", start_s))
+        start_ms = max(0, int(round(start_s * 1000)))
+        end_ms = max(start_ms + 1, int(round(end_s * 1000)))
+
+        srt_lines.append(str(segment_index))
+        srt_lines.append(f"{_format_ms_to_srt(start_ms)} --> {_format_ms_to_srt(end_ms)}")
+        srt_lines.append(text)
+        srt_lines.append("")
+        txt_lines.append(text)
+        segment_index += 1
+
+    if not txt_lines:
+        raise ValueError("Transcription segments were present but contained no usable text.")
+
+    output_base.with_suffix(".srt").write_text("\n".join(srt_lines), encoding="utf-8")
+    output_base.with_suffix(".txt").write_text("\n".join(txt_lines) + "\n", encoding="utf-8")
+
+
+def postprocess_transcription_outputs(
+    output_base: Path,
+    split_on_punc: bool,
+    llm_correct: bool,
+    llm_model: str,
+    llm_glossary: str | None,
+    autocorrect: bool,
+) -> None:
+    """Apply optional post-processing steps for generated transcript files."""
+    if split_on_punc:
+        split_lines = _split_srt_on_punctuation(output_base.with_suffix(".srt"))
+        _rewrite_txt_from_lines(output_base.with_suffix(".txt"), split_lines)
+    if llm_correct:
+        llm_correct_file_in_place(output_base.with_suffix(".txt"), llm_model, llm_glossary)
+        llm_correct_file_in_place(output_base.with_suffix(".srt"), llm_model, llm_glossary)
+    if autocorrect:
+        autocorrect_file_in_place(output_base.with_suffix(".txt"))
+        autocorrect_file_in_place(output_base.with_suffix(".srt"))
+
+
 def run_whisper_command(
     audio_file: str,
     lang: str,
@@ -656,15 +723,14 @@ def run_whisper_command(
         ) from exc
     else:
         output_base = Path(output_dir) / f"{file_name}_{lang}"
-        if split_on_punc:
-            split_lines = _split_srt_on_punctuation(output_base.with_suffix(".srt"))
-            _rewrite_txt_from_lines(output_base.with_suffix(".txt"), split_lines)
-        if llm_correct:
-            llm_correct_file_in_place(output_base.with_suffix(".txt"), llm_model, llm_glossary)
-            llm_correct_file_in_place(output_base.with_suffix(".srt"), llm_model, llm_glossary)
-        if autocorrect:
-            autocorrect_file_in_place(output_base.with_suffix(".txt"))
-            autocorrect_file_in_place(output_base.with_suffix(".srt"))
+        postprocess_transcription_outputs(
+            output_base=output_base,
+            split_on_punc=split_on_punc,
+            llm_correct=llm_correct,
+            llm_model=llm_model,
+            llm_glossary=llm_glossary,
+            autocorrect=autocorrect,
+        )
     finally:
         if cleanup_temp_wav and input_for_whisper.exists():
             input_for_whisper.unlink()
