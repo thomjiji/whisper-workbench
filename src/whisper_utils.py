@@ -133,6 +133,25 @@ def get_model_path_by_variant(model_variant: str) -> Path:
     return resolved
 
 
+def get_vad_model_path() -> Path:
+    """Get path to whisper.cpp VAD model from env or local default."""
+    vad_model_path = os.environ.get("WHISPER_VAD_MODEL_PATH")
+    if vad_model_path:
+        resolved = Path(vad_model_path).expanduser().resolve()
+        _ensure_file_readable(resolved, "Whisper VAD model file")
+        return resolved
+
+    whisper_cpp_dir = os.environ.get(
+        "WHISPER_CPP_DIR",
+        Path(__file__).resolve().parent.parent / "vendor" / "whisper.cpp",
+    )
+    candidate = (
+        Path(whisper_cpp_dir).expanduser().resolve() / "models" / "ggml-silero-v5.1.2.bin"
+    )
+    _ensure_file_readable(candidate, "Whisper VAD model file")
+    return candidate
+
+
 def remove_16khz_suffix(audio_file: str) -> str:
     """Extract the file name and remove the '_16khz' suffix."""
     base_file = os.path.splitext(audio_file)[0]
@@ -665,6 +684,8 @@ def run_whisper_command(
     no_gpu: bool = False,
     no_fallback: bool = False,
     suppress_nst: bool = False,
+    use_vad: bool = False,
+    vad_model_path: str | None = None,
     split_on_punc: bool = False,
     llm_correct: bool = False,
     llm_model: str = "haiku",
@@ -684,6 +705,14 @@ def run_whisper_command(
     whisper_cli = get_whisper_cli_path()
     resolved_model_path = Path(model_path) if model_path else get_model_path()
     _ensure_file_readable(resolved_model_path, "Whisper model file")
+    resolved_vad_model_path: Path | None = None
+    if use_vad:
+        resolved_vad_model_path = (
+            Path(vad_model_path).expanduser().resolve()
+            if vad_model_path
+            else get_vad_model_path()
+        )
+        _ensure_file_readable(resolved_vad_model_path, "Whisper VAD model file")
 
     cmd = [
         str(whisper_cli),
@@ -714,6 +743,8 @@ def run_whisper_command(
         cmd.append("--no-fallback")
     if suppress_nst:
         cmd.append("--suppress-nst")
+    if use_vad and resolved_vad_model_path:
+        cmd.extend(["--vad", "--vad-model", str(resolved_vad_model_path)])
     if initial_prompt:
         cmd.extend(["--prompt", initial_prompt])
 
