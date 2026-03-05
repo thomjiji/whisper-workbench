@@ -133,7 +133,7 @@ uv run python main.py transcribe -i audio.wav -o ./output -l zh --decode-profile
 # Split subtitle lines on punctuation (useful for Chinese readability)
 uv run python main.py transcribe -i audio.wav -o ./output -l zh --split-on-punc
 
-# Use Groq backend (requires GROQ_API_KEY)
+# Use Groq backend (requires GROQ_API_KEY; default model is whisper-large-v3)
 uv run python main.py transcribe -i audio.wav -o ./output -l zh --backend groq
 
 # Diagnose backend setup

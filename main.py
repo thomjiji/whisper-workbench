@@ -99,7 +99,7 @@ def _add_groq_backend_args(parser: argparse.ArgumentParser) -> None:
         "--groq-model",
         type=str,
         default=None,
-        help="Groq model name (default: whisper-large-v3-turbo).",
+        help="Groq model name (default: whisper-large-v3).",
     )
     parser.add_argument(
         "--groq-timeout-sec",
@@ -188,7 +188,7 @@ def cmd_transcribe(args: argparse.Namespace) -> None:
 
     selected_model_path: str | None = None
     decode_options: dict[str, int | float | bool] | None = None
-    groq_model = args.groq_model or "whisper-large-v3-turbo"
+    groq_model = args.groq_model or "whisper-large-v3"
     groq_timeout_sec = args.groq_timeout_sec or 300
 
     if args.backend == "local":

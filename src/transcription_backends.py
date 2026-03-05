@@ -37,7 +37,7 @@ class TranscribeRequest:
     llm_glossary: str | None
     local_model_path: str | None = None
     decode_options: dict[str, int | float | bool] | None = None
-    groq_model: str = "whisper-large-v3-turbo"
+    groq_model: str = "whisper-large-v3"
     groq_timeout_sec: int = 300
 
 
