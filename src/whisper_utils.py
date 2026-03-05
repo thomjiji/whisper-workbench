@@ -272,20 +272,39 @@ def _llm_correct_lines(
     """Use an LLM to fix homophone errors and proper noun inconsistencies."""
     numbered = "\n".join(f"{i + 1}. {line}" for i, line in enumerate(lines))
     prompt_parts = [
-        "You are a transcript correction assistant.\n"
-        "Fix: (1) homophone errors 同音字错误 e.g. 之瞎→之下, 在→再\n"
-        "     (2) proper noun forms per glossary 专名统一\n"
-        "Rules 规则:\n"
-        "- Return EXACTLY the same number of lines in the same order"
-        " 返回行数必须与输入完全一致\n"
-        "- Output ONLY the numbered list, no explanations 只输出编号列表，不要解释\n"
-        "- Format: N. corrected text\n"
-        "- Do NOT merge or split lines 不要合并或拆分行\n"
-        "- If a line needs no correction, return it unchanged\n"
-        "- No tool use needed, just output the corrected list directly\n",
+        "ROLE:\n"
+        "You are a transcript correction assistant for Chinese interview transcripts.\n\n"
+        "GOAL:\n"
+        "Correct each line while preserving meaning and sentence boundaries.\n\n"
+        "HARD CONSTRAINTS (必须严格遵守):\n"
+        "1) Return EXACTLY the same number of lines in the same order.\n"
+        "2) Do NOT merge or split lines.\n"
+        "3) Output ONLY a numbered list in this format: N. corrected text\n"
+        "4) No explanations, no extra headings, no markdown.\n\n"
+        "NORMALIZATION RULES:\n"
+        "- Fix obvious homophone/misrecognition errors (同音字与误识别纠错).\n"
+        "- Normalize proper nouns/brand names to official casing and spacing.\n"
+        "  Example: deep mind -> DeepMind, open ai -> OpenAI.\n"
+        "- Convert Traditional Chinese to Simplified Chinese for all Chinese text (繁体统一转简体).\n"
+        "- Keep numbers, punctuation, and non-Chinese tokens unless correction is clearly needed.\n"
+        "- If a line is already correct, keep it unchanged.\n\n"
     ]
     if glossary:
-        prompt_parts.append(f"\nGlossary 词汇表 (use these exact forms):\n{glossary}\n\n---\n\n")
+        prompt_parts.append(
+            "GLOSSARY OVERRIDE (最高优先级):\n"
+            "If any glossary term or alias appears in a line, you MUST normalize it to the\n"
+            "exact glossary form. Glossary rules override other stylistic choices.\n"
+            "Do not invent alternatives when glossary specifies a form.\n\n"
+            f"Glossary 词汇表 (use these exact forms):\n{glossary}\n\n"
+        )
+    prompt_parts.append(
+        "SELF-CHECK BEFORE OUTPUT (do not print this checklist):\n"
+        "- Line count unchanged\n"
+        "- Numbering complete from 1..N\n"
+        "- Chinese text is simplified\n"
+        "- Glossary terms strictly enforced (if provided)\n\n"
+        "INPUT:\n"
+    )
     prompt_parts.append(numbered)
     prompt = "".join(prompt_parts)
 

@@ -146,6 +146,12 @@ With `--backend local`, files are converted to temporary 16kHz mono WAV for whis
 With `--backend groq`, the original input file is uploaded directly to Groq.
 By default, generated `.txt` and `.srt` are post-processed with `autocorrect-py`.
 
+### LLM Correction Notes
+
+- `--llm-correct` applies line-by-line correction while preserving line count and order.
+- Chinese text is normalized to Simplified Chinese in the LLM correction stage.
+- If `--glossary-file` is provided, glossary forms are treated as hard constraints and must be followed exactly.
+
 ### Decoding Notes
 
 - `--decode-profile balanced` (default local profile): practical speed/quality.
