@@ -32,6 +32,24 @@ def normalize_model(model: str) -> tuple[str, str]:
     return model_variant, f"ggml-{model_variant}.bin"
 
 
+def normalize_vad_model(vad_model: str) -> tuple[str, str]:
+    normalized = vad_model.strip().lower()
+    aliases: dict[str, str] = {
+        "silero-v5.1.2": "silero-v5.1.2",
+        "v5": "silero-v5.1.2",
+        "silero-v6.2.0": "silero-v6.2.0",
+        "v6": "silero-v6.2.0",
+    }
+    model_variant = aliases.get(normalized)
+    if not model_variant:
+        raise ValueError(
+            "unsupported VAD model "
+            f"'{vad_model}' "
+            "(use silero-v5.1.2/v5 or silero-v6.2.0/v6)"
+        )
+    return model_variant, f"ggml-{model_variant}.bin"
+
+
 def run(cmd: list[str], cwd: Path | None = None) -> None:
     subprocess.run(cmd, check=True, cwd=str(cwd) if cwd else None)
 
@@ -73,10 +91,21 @@ def main() -> int:
         action="store_true",
         help="Do not run git pull when vendor/whisper.cpp already exists.",
     )
+    parser.add_argument(
+        "--vad-model",
+        default="silero-v5.1.2",
+        help="VAD model variant: silero-v5.1.2|v5|silero-v6.2.0|v6",
+    )
+    parser.add_argument(
+        "--skip-vad",
+        action="store_true",
+        help="Do not download whisper.cpp VAD model.",
+    )
     args = parser.parse_args()
 
     try:
         model_variant, model_name = normalize_model(args.model)
+        vad_variant, vad_name = normalize_vad_model(args.vad_model)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -87,6 +116,10 @@ def main() -> int:
 
     print("==> Setting up whisper.cpp...")
     print(f"==> Model variant: {model_variant} ({model_name})")
+    if args.skip_vad:
+        print("==> VAD setup skipped")
+    else:
+        print(f"==> VAD model variant: {vad_variant} ({vad_name})")
 
     vendor_dir.mkdir(parents=True, exist_ok=True)
 
@@ -115,14 +148,32 @@ def main() -> int:
     else:
         print(f"==> Model {model_name} already exists")
 
+    vad_path = whisper_cpp_dir / "models" / vad_name
+    if args.skip_vad:
+        print("==> Skipping VAD model download")
+    elif not vad_path.exists():
+        print(f"==> Downloading VAD model {vad_name}...")
+        if os.name == "nt":
+            download_cmd = whisper_cpp_dir / "models" / "download-vad-model.cmd"
+            run(["cmd", "/c", str(download_cmd), vad_variant], cwd=whisper_cpp_dir / "models")
+        else:
+            download_sh = whisper_cpp_dir / "models" / "download-vad-model.sh"
+            run([str(download_sh), vad_variant], cwd=whisper_cpp_dir / "models")
+    else:
+        print(f"==> VAD model {vad_name} already exists")
+
     whisper_cli = find_whisper_cli(whisper_cpp_dir)
 
     print("\n==> Setup complete!\n")
     print(f"whisper.cpp built at: {whisper_cli}")
     print(f"Model downloaded to:  {model_path}")
+    if not args.skip_vad:
+        print(f"VAD model at:         {vad_path}")
     print("\nOptional environment overrides:")
     print(f"  WHISPER_CPP_DIR={whisper_cpp_dir}")
     print(f"  WHISPER_MODEL_PATH={model_path}")
+    if not args.skip_vad:
+        print(f"  WHISPER_VAD_MODEL_PATH={vad_path}")
 
     return 0
 

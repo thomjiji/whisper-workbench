@@ -664,6 +664,7 @@ def run_whisper_command(
     max_len: int = 0,
     no_gpu: bool = False,
     no_fallback: bool = False,
+    suppress_nst: bool = False,
     split_on_punc: bool = False,
     llm_correct: bool = False,
     llm_model: str = "haiku",
@@ -711,6 +712,8 @@ def run_whisper_command(
         cmd.append("--no-gpu")
     if no_fallback:
         cmd.append("--no-fallback")
+    if suppress_nst:
+        cmd.append("--suppress-nst")
     if initial_prompt:
         cmd.extend(["--prompt", initial_prompt])
 

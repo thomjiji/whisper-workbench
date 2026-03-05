@@ -40,7 +40,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 Setup is implemented by a single cross-platform Python script: `scripts/setup_whisper_cpp.py`.
 Wrappers `setup.sh` / `setup.ps1` / `setup.bat` call it.
 
-This will clone whisper.cpp, build it, and download a model (default: `large-v3`):
+This will clone whisper.cpp, build it, download a Whisper model (default: `large-v3`), and download a VAD model (default: `silero-v5.1.2`):
 
 ```bash
 chmod +x setup.sh
@@ -52,6 +52,12 @@ chmod +x setup.sh
 # Optional: use smaller models
 ./setup.sh --model medium
 ./setup.sh --model small
+
+# Optional: select a VAD model
+./setup.sh --vad-model silero-v6.2.0
+
+# Optional: skip VAD model download
+./setup.sh --skip-vad
 
 # Short form
 ./setup.sh -m turbo
@@ -69,6 +75,12 @@ On Windows (PowerShell):
 .\setup.ps1 --model medium
 .\setup.ps1 --model small
 
+# Optional: select a VAD model
+.\setup.ps1 --vad-model silero-v6.2.0
+
+# Optional: skip VAD model download
+.\setup.ps1 --skip-vad
+
 # Short form
 .\setup.ps1 -m turbo
 ```
@@ -80,6 +92,8 @@ setup.bat
 setup.bat --model large-v3-turbo
 setup.bat --model medium
 setup.bat --model small
+setup.bat --vad-model silero-v6.2.0
+setup.bat --skip-vad
 setup.bat -m turbo
 ```
 
@@ -89,6 +103,8 @@ Direct cross-platform invocation:
 python scripts/setup_whisper_cpp.py --model turbo
 python scripts/setup_whisper_cpp.py --model medium
 python scripts/setup_whisper_cpp.py --model small
+python scripts/setup_whisper_cpp.py --vad-model silero-v6.2.0
+python scripts/setup_whisper_cpp.py --skip-vad
 ```
 
 ### 4. Install Python dependencies
@@ -186,6 +202,7 @@ Override default paths with environment variables:
 | `WHISPER_CLI_PATH` | Auto-detect from PATH or `vendor/whisper.cpp/build/bin` | Path to whisper-cli executable |
 | `WHISPER_CPP_DIR` | `vendor/whisper.cpp` | Path to whisper.cpp installation |
 | `WHISPER_MODEL_PATH` | `vendor/whisper.cpp/models/ggml-large-v3.bin` (falls back to turbo if v3 missing) | Path to GGML model file |
+| `WHISPER_VAD_MODEL_PATH` | `vendor/whisper.cpp/models/ggml-silero-v5.1.2.bin` | Path to whisper.cpp VAD model file |
 
 Example:
 
@@ -193,6 +210,7 @@ Example:
 export WHISPER_CPP_DIR=/opt/whisper.cpp
 export WHISPER_CLI_PATH=/opt/whisper.cpp/build/bin/whisper-cli
 export WHISPER_MODEL_PATH=/opt/models/ggml-large-v3-turbo.bin
+export WHISPER_VAD_MODEL_PATH=/opt/models/ggml-silero-v5.1.2.bin
 export GROQ_API_KEY=your_groq_api_key
 uv run python main.py transcribe -i audio.wav -o ./output --backend groq
 ```

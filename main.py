@@ -120,6 +120,7 @@ def _resolve_decode_options(decode_profile: str) -> dict[str, int | float | bool
             "max_context": 64,
             "no_gpu": False,
             "no_fallback": False,
+            "suppress_nst": True,
         },
         "accuracy": {
             "threads": 8,
@@ -131,6 +132,7 @@ def _resolve_decode_options(decode_profile: str) -> dict[str, int | float | bool
             "max_len": 80,
             "no_gpu": False,
             "no_fallback": False,
+            "suppress_nst": True,
         },
         "legacy": {
             "threads": 8,
@@ -141,6 +143,7 @@ def _resolve_decode_options(decode_profile: str) -> dict[str, int | float | bool
             "max_context": 64,
             "no_gpu": False,
             "no_fallback": False,
+            "suppress_nst": True,
         },
     }
     return dict(presets[decode_profile])
