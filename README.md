@@ -162,11 +162,98 @@ With `--backend local`, files are converted to temporary 16kHz mono WAV for whis
 With `--backend groq`, the original input file is uploaded directly to Groq.
 By default, generated `.txt` and `.srt` are post-processed with `autocorrect-py`.
 
+### Post-Processing Pipeline
+
+Post-processing runs in a fixed order after transcription files are written.
+
+```text
+[Backend transcription done]
+            |
+            v
+[Write initial .srt and .txt]
+            |
+            v
+      [--split-on-punc?]
+        /            \
+      Yes            No
+      |               |
+      v               v
+[Split SRT lines]   [Keep original SRT/TXT]
+[Redistribute timestamps]
+[Rewrite TXT from split SRT]
+        \            /
+         v          v
+       [--llm-correct?]
+         /          \
+       Yes          No
+       |             |
+       v             v
+[LLM correct TXT]  [Skip LLM correction]
+[LLM correct SRT]          |
+        \                 /
+         v               v
+       [--no-autocorrect?]
+         /              \
+       No               Yes
+       |                 |
+       v                 v
+[Autocorrect TXT]    [Skip autocorrect]
+[Autocorrect SRT]           |
+        \                  /
+         v                v
+            [Final outputs]
+```
+
+Order and behavior details:
+
+- Step 1: Backend generates raw transcript segments and writes initial `.srt` and `.txt`.
+- Step 2 (`--split-on-punc`): split SRT lines on punctuation and redistribute timestamps.
+- Step 3 (`--split-on-punc`): rewrite TXT from split SRT lines so TXT and SRT stay line-aligned.
+- Step 4 (`--llm-correct`): run LLM correction on TXT first, then on SRT.
+- Step 5 (default): run autocorrect on TXT and SRT unless `--no-autocorrect` is set.
+- Output: final `.srt` and `.txt` are the result of this ordered pipeline.
+
 ### LLM Correction Notes
 
 - `--llm-correct` applies line-by-line correction while preserving line count and order.
 - Chinese text is normalized to Simplified Chinese in the LLM correction stage.
 - If `--glossary-file` is provided, glossary forms are treated as hard constraints and must be followed exactly.
+
+### Glossary File Spec
+
+Use a plain UTF-8 text file. Current parser behavior is "raw text prompt injection", so keep the format simple and explicit:
+
+- One glossary entry per line.
+- Each line is a canonical target form you want in final output.
+- Blank lines are allowed for visual grouping.
+- Do not use `:` / `->` / CSV alias syntax in the file.
+- Do not add numbering, markdown, or comments.
+
+Recommended content scope:
+
+- Proper nouns only: people, brands, organizations, product names, works/titles.
+- Include high-risk variants as separate canonical lines when needed (example: both `P.K.14` and `PK14`).
+- Keep the list compact and high-confidence to reduce over-correction.
+
+Example:
+
+```txt
+DeepMind
+OpenAI
+P.K.14
+PK14
+Dear Eloise
+李高特四重奏
+兵马司
+```
+
+Not recommended:
+
+```txt
+DeepMind: deep mind, deepmind
+1. OpenAI
+# comments
+```
 
 ### Decoding Notes
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -51,7 +52,23 @@ def normalize_vad_model(vad_model: str) -> tuple[str, str]:
 
 
 def run(cmd: list[str], cwd: Path | None = None) -> None:
-    subprocess.run(cmd, check=True, cwd=str(cwd) if cwd else None)
+    try:
+        subprocess.run(cmd, check=True, cwd=str(cwd) if cwd else None)
+    except FileNotFoundError as exc:
+        tool = cmd[0] if cmd else "<unknown>"
+        raise RuntimeError(
+            f"Required command not found: {tool}. "
+            f"Install it and ensure it is in PATH. failed_cmd={cmd}"
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            f"Command failed (exit={exc.returncode}): {cmd}. "
+            "See command output above for the root cause."
+        ) from exc
+
+
+def has_command(name: str) -> bool:
+    return shutil.which(name) is not None
 
 
 def find_whisper_cli(whisper_cpp_dir: Path) -> Path:
@@ -102,6 +119,17 @@ def main() -> int:
         help="Do not download whisper.cpp VAD model.",
     )
     args = parser.parse_args()
+
+    required_tools = ["git", "cmake"]
+    missing_tools = [tool for tool in required_tools if not has_command(tool)]
+    if missing_tools:
+        print(
+            "error: missing required command(s): "
+            + ", ".join(missing_tools)
+            + ". Install them first.",
+            file=sys.stderr,
+        )
+        return 2
 
     try:
         model_variant, model_name = normalize_model(args.model)

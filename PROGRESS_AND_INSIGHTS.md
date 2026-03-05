@@ -1,112 +1,79 @@
-# Whisper Workbench Progress And Insights
+# Agent Handoff: Whisper Workbench
 
-## Scope
-This document summarizes the cross-platform setup/transcription improvements, subtitle segmentation experiments, and decoding-profile tuning performed during this session.
+## 1) Mission
+Keep `whisper-workbench` stable for real-world transcription workflows:
+- Local backend: `whisper.cpp`
+- Remote backend: `Groq`
+- Output quality pipeline: `split-on-punc` -> `llm-correct` -> `autocorrect`
 
-## Timeline Of Main Changes
-1. Added Windows-compatible setup support:
-   - `setup.ps1` + `setup.bat`
-   - README usage updates for Windows.
-2. Reverted two earlier Windows hotfix commits on request, then performed a broader cross-platform refactor:
-   - Unified setup implementation through `scripts/setup_whisper_cpp.py`.
-   - `setup.sh` / `setup.ps1` became wrappers.
-   - Added `doctor` command for environment checks.
-3. Added and iterated decoding controls:
-   - Introduced decode profiles (`balanced`, `accuracy`).
-   - Later added `legacy` profile for backward compatibility with original stable params.
-4. Prompt feature direction changed several times by request:
-   - Added markdown/OpenAI prompt generation and A/B tooling.
-   - Later removed OpenAI-related functionality.
-   - Restored `--prompt-file` only (local file prompt, no API dependency).
-5. Subtitle segmentation improvements:
-   - Added optional `--split-on-punc` post-processing for SRT.
-   - Implemented time-span redistribution when one SRT line is split into multiple lines.
-   - Added trailing punctuation trimming for split outputs.
-   - Fixed decimal splitting bug (`1.0` should not become `1` + `0`).
-   - Fixed repeated/zero-duration segment issue caused by allocation/rounding edge cases.
+This file is the operational handoff for multiple agents (not a changelog).
 
-## Current Decode Profiles
-Defined in `main.py`:
+## 2) Current Snapshot
+- Branch: `feat/groq-backend-integration`
+- CLI commands: `transcribe`, `convert`, `batch`, `doctor`
+- `transcribe --backend` options on this branch: `local`, `groq`
+- Decode profiles: `balanced`, `accuracy`, `legacy`
+- Default local profile includes VAD + suppress-nst behavior from `main.py` decode presets
 
-- `balanced` (default):
-  - `threads=8`
-  - `split_on_word=True`
-  - `beam_size=5`
-  - `best_of=5`
-  - `entropy_thold=2.8`
-  - `max_context=64`
-  - `no_gpu=False`
-  - `no_fallback=False`
+## 3) Source Of Truth Files
+- CLI orchestration: `main.py`
+- Backends: `src/transcription_backends.py`
+- whisper.cpp runtime helpers + postprocessing pipeline: `src/whisper_utils.py`
+- Setup implementation (cross-platform): `scripts/setup_whisper_cpp.py`
+- Setup wrappers: `setup.sh`, `setup.ps1`, `setup.bat`
+- User docs: `README.md`
 
-- `accuracy`:
-  - `threads=8`
-  - `split_on_word=True`
-  - `beam_size=8`
-  - `best_of=8`
-  - `entropy_thold=2.6`
-  - `max_context=96`
-  - `max_len=80`
-  - `no_gpu=False`
-  - `no_fallback=False`
+## 4) Non-Negotiable Behavior
+- Do not break existing `local/groq` CLI flags.
+- Keep postprocessing order fixed:
+  1. optional `--split-on-punc`
+  2. optional `--llm-correct`
+  3. optional autocorrect (default on, disabled by `--no-autocorrect`)
+- `--split-on-punc` must preserve 1:1 line mapping between final SRT segments and TXT lines.
+- `--llm-correct` must preserve line count/order.
+- Glossary terms (if provided) are hard constraints in LLM correction.
 
-- `legacy` (backward compatibility):
-  - `threads=8`
-  - `split_on_word=True`
-  - `beam_size=5`
-  - `best_of=5`
-  - `entropy_thold=2.8`
-  - `max_context=64`
-  - `no_gpu=False`
-  - `no_fallback=False`
+## 5) Execution Workflow For Agents
+1. Plan work in a short checklist before editing.
+2. Make smallest viable patch.
+3. Run targeted verification commands.
+4. Update this file sections 2/7/8 if behavior changed.
 
-## Key Insights
-1. Repetition/hallucination is mainly a decoding behavior problem, not a punctuation post-processing problem.
-2. `max-context` is a primary anti-repetition knob:
-   - Bounding context (`64`/`96`) tends to reduce long-range self-repetition vs unlimited context.
-3. `split-on-word` tradeoff for CJK:
-   - With `-sow`: can produce long lines.
-   - Without `-sow`: can produce fragmented tokens.
-   - Current design keeps `-sow` and makes punctuation split optional (`--split-on-punc`).
-4. Punctuation splitting must be context-aware:
-   - Never split decimal numbers (`1.0`).
-   - Be careful with dot/comma semantics and timestamp redistribution precision.
-5. OpenAI-based prompt generation is not required to improve robustness; local decode/profile tuning already gives meaningful control.
+## 6) Verification Commands
+Run these after any substantial change:
 
-## Issues Encountered And Resolved
-1. Windows subprocess decode error (`gbk`/UnicodeDecodeError) during ffmpeg stderr capture.
-2. Windows App Control block (`WinError 4551`) for `whisper-cli.exe`.
-3. Model path/readability failures.
-4. GPU/Metal instability on macOS in some runs (`--no-gpu` workaround used in tests).
-5. `--split-on-punc` early implementation bugs:
-   - Invalid UTF-8 read crash -> switched to `errors="replace"`.
-   - Decimal split bug (`AI 1.0`) -> split logic refined.
-   - Duplicate/0ms segments -> improved time allocation + dedupe merge.
+```bash
+python3 -m py_compile main.py src/whisper_utils.py src/transcription_backends.py scripts/setup_whisper_cpp.py
+python3 main.py --help
+python3 main.py transcribe --help
+python3 main.py doctor --help
+```
 
-## Current CLI State
-- Main commands:
-  - `transcribe`
-  - `convert`
-  - `batch`
-  - `doctor`
-- `transcribe` includes:
-  - `--prompt-file` (local prompt only)
-  - `--decode-profile {balanced,accuracy,legacy}`
-  - `--split-on-punc` (optional SRT split pass)
+Recommended runtime sanity checks:
 
-## Recommended Usage
-1. Backward-compatible behavior (closest to original stable setup):
-   - `--decode-profile legacy`
-2. Default practical behavior:
-   - `--decode-profile balanced`
-3. Better precision with higher cost:
-   - `--decode-profile accuracy`
-4. If subtitle readability is more important than raw ASR segmentation:
-   - Add `--split-on-punc`
+```bash
+# Local backend check
+uv run python main.py doctor --backend local
 
-## Suggested Next Validation
-1. Run the same audio through all three profiles and compare:
-   - repeated-line rate
-   - long-line count
-   - proper noun correctness
-2. Compare `--split-on-punc` on/off for Chinese subtitle readability and timing acceptability.
-3. If needed, add a small regression test fixture for SRT split edge cases (`1.0`, abbreviations, zero-length guard).
+# Groq backend check
+uv run python main.py doctor --backend groq
+```
+
+## 7) Open Work Queue
+- [ ] Add robust SRT merge strategy for over-fragmented subtitle lines (configurable threshold).
+- [ ] Add automated A/B evaluation helper for glossary impact (term hit-rate + diff report).
+- [ ] Add regression fixture set for punctuation split edge cases (`1.0`, abbreviations, zero-length guards).
+- [ ] Add backend-focused smoke test script under `scripts/`.
+
+## 8) Known Risks / Watchouts
+- GPU/Metal instability can still occur on some macOS runs in `whisper.cpp`.
+- Large media files can trigger backend/model/provider limits.
+- Subtitle readability regressions often come from interplay of VAD + punctuation split.
+- Documentation drift risk is high: update `README.md` when changing CLI behavior.
+
+## 9) Definition Of Done (Agent Level)
+A task is done only when:
+- Code changed minimally and intentionally.
+- Relevant commands in section 6 pass.
+- README is updated if user-facing behavior changed.
+- This file reflects new reality (snapshot/open queue/risks) when applicable.
