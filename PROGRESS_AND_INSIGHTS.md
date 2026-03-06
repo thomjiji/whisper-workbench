@@ -1,3 +1,17 @@
+# Archived: PROGRESS_AND_INSIGHTS
+
+This file is kept for historical context only.  
+Active agent collaboration now uses:
+
+- `.codex/AGENTS.md` (root protocol)
+- `.codex/TASKS.md` (backlog and acceptance)
+- `.codex/TODO.md` (near-term execution board)
+- `.codex/ISSUES.md` (known problems and workarounds)
+
+Historical sections below may mention deprecated setup wrappers (`setup.sh`/`setup.ps1`/`setup.bat`).
+
+---
+
 # Agent Handoff: Whisper Workbench
 
 ## 1) Mission

@@ -11,6 +11,49 @@ Python wrapper scripts for local [whisper.cpp](https://github.com/ggerganov/whis
 - Optional initial prompt injection (`--prompt-file`) for whisper-cli
 - Automatic autocorrect post-processing for generated `.txt` and `.srt` files
 
+## Agent-Native Workflow
+
+This repository uses an agent-native document workflow to keep multi-agent coding aligned.
+
+Document graph:
+
+```text
+.codex/AGENTS.md  ->  .codex/TASKS.md  ->  .codex/TODO.md
+          \                                   |
+           \-------------------------------> .codex/ISSUES.md
+```
+
+Responsibilities:
+
+- `.codex/AGENTS.md`: root collaboration protocol, quality gates, and workflow rules.
+- `.codex/TASKS.md`: medium/long-horizon task backlog with acceptance criteria.
+- `.codex/TODO.md`: short-horizon execution board (`Now/Next/Later/Blocked`).
+- `.codex/ISSUES.md`: known problems, repro steps, and workarounds.
+
+Default collaboration loop:
+
+1. Read `.codex/AGENTS.md`.
+2. Pick or update one task in `.codex/TASKS.md`.
+3. Move active work into `.codex/TODO.md` `Now`.
+4. Implement and verify.
+5. Update status in `.codex/TASKS.md`/`.codex/TODO.md` and log new problems in `.codex/ISSUES.md`.
+
+Cross-vendor context mapping:
+
+- OpenAI/Codex: `AGENTS.md` style project instruction file (stored here as `.codex/AGENTS.md`).
+- Anthropic/Claude: `CLAUDE.md` memory pattern is mapped to this repo's `.codex/AGENTS.md`.
+- Google/Gemini: `GEMINI.md` context pattern is mapped to this repo's `.codex/AGENTS.md`.
+
+Official references:
+
+- OpenAI: [Introducing Codex](https://openai.com/index/introducing-codex/)
+- OpenAI: [Unrolling the Codex agent loop](https://openai.com/index/unrolling-the-codex-agent-loop/)
+- Anthropic: [How Claude remembers your project](https://code.claude.com/docs/en/memory)
+- Anthropic: [Todo tracking in Claude Agent SDK](https://platform.claude.com/docs/en/agent-sdk/todo-tracking)
+- Google: [Introducing Gemini CLI (official blog)](https://blog.google/innovation-and-ai/technology/developers-tools/introducing-gemini-cli-open-source-ai-agent/)
+- Google: [GEMINI.md context file docs](https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/gemini-md.md)
+- Google: [Gemini CLI todos tool docs](https://github.com/google-gemini/gemini-cli/blob/main/docs/tools/todos.md)
+
 ## Prerequisites
 
 - **Python 3.12+**
@@ -37,74 +80,28 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ### 3. Run the setup script
 
-Setup is implemented by a single cross-platform Python script: `scripts/setup_whisper_cpp.py`.
-Wrappers `setup.sh` / `setup.ps1` / `setup.bat` call it.
+Setup uses one cross-platform entry command through `uv`:
 
 This will clone whisper.cpp, build it, download a Whisper model (default: `large-v3`), and download a VAD model (default: `silero-v5.1.2`):
 
 ```bash
-chmod +x setup.sh
-./setup.sh
+uv run wb-setup
 
 # Optional: use large-v3-turbo for faster transcription
-./setup.sh --model large-v3-turbo
+uv run wb-setup --model large-v3-turbo
 
 # Optional: use smaller models
-./setup.sh --model medium
-./setup.sh --model small
+uv run wb-setup --model medium
+uv run wb-setup --model small
 
 # Optional: select a VAD model
-./setup.sh --vad-model silero-v6.2.0
+uv run wb-setup --vad-model silero-v6.2.0
 
 # Optional: skip VAD model download
-./setup.sh --skip-vad
+uv run wb-setup --skip-vad
 
 # Short form
-./setup.sh -m turbo
-```
-
-On Windows (PowerShell):
-
-```powershell
-.\setup.ps1
-
-# Optional: use large-v3-turbo for faster transcription
-.\setup.ps1 --model large-v3-turbo
-
-# Optional: use smaller models
-.\setup.ps1 --model medium
-.\setup.ps1 --model small
-
-# Optional: select a VAD model
-.\setup.ps1 --vad-model silero-v6.2.0
-
-# Optional: skip VAD model download
-.\setup.ps1 --skip-vad
-
-# Short form
-.\setup.ps1 -m turbo
-```
-
-On Windows (`cmd.exe`):
-
-```bat
-setup.bat
-setup.bat --model large-v3-turbo
-setup.bat --model medium
-setup.bat --model small
-setup.bat --vad-model silero-v6.2.0
-setup.bat --skip-vad
-setup.bat -m turbo
-```
-
-Direct cross-platform invocation:
-
-```bash
-python scripts/setup_whisper_cpp.py --model turbo
-python scripts/setup_whisper_cpp.py --model medium
-python scripts/setup_whisper_cpp.py --model small
-python scripts/setup_whisper_cpp.py --vad-model silero-v6.2.0
-python scripts/setup_whisper_cpp.py --skip-vad
+uv run wb-setup -m turbo
 ```
 
 ### 4. Install Python dependencies
@@ -306,12 +303,14 @@ uv run python main.py transcribe -i audio.wav -o ./output --backend groq
 
 ```
 whisper-workbench/
+├── .codex/
+│   ├── AGENTS.md              # Root agent collaboration protocol
+│   ├── TASKS.md               # Backlog with acceptance criteria
+│   ├── TODO.md                # Near-term execution board
+│   └── ISSUES.md              # Known issues and workarounds
 ├── main.py                     # Unified CLI entry point
-├── setup.sh                    # Setup whisper.cpp and download model
-├── setup.ps1                   # Windows PowerShell setup script
-├── setup.bat                   # Windows cmd wrapper for setup.ps1
 ├── scripts/
-│   ├── setup_whisper_cpp.py            # Cross-platform whisper.cpp setup
+│   ├── setup_whisper_cpp.py            # Cross-platform whisper.cpp setup implementation
 │   ├── audio_trim_silence.py           # Trim silence from an audio file via ffmpeg
 │   ├── sync_srt_to_txt.py              # Sync SRT text lines into TXT (with line-count check)
 │   ├── sync_txt_to_srt.py              # Sync TXT corrected lines back into SRT (with line-count check)
