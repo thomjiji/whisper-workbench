@@ -37,6 +37,7 @@ class TranscribeRequest:
     llm_model: str | None
     llm_timeout_sec: int
     llm_glossary: str | None
+    skip_postprocess: bool = False
     local_model_path: str | None = None
     decode_options: dict[str, int | float | bool] | None = None
     groq_model: str = "whisper-large-v3"
@@ -63,6 +64,7 @@ class LocalWhisperCppBackend:
             llm_model=request.llm_model,
             llm_timeout_sec=request.llm_timeout_sec,
             llm_glossary=request.llm_glossary,
+            skip_postprocess=request.skip_postprocess,
             **decode_options,
         )
 
@@ -209,13 +211,14 @@ class GroqWhisperBackend:
         file_name = remove_16khz_suffix(str(request.audio_file.resolve()))
         output_base = request.output_dir / f"{file_name}_{request.lang}"
         write_srt_txt_from_segments(output_base=output_base, segments=segments)
-        postprocess_transcription_outputs(
-            output_base=output_base,
-            split_on_punc=request.split_on_punc,
-            llm_correct=request.llm_correct,
-            llm_backend=request.llm_backend,
-            llm_model=request.llm_model,
-            llm_timeout_sec=request.llm_timeout_sec,
-            llm_glossary=request.llm_glossary,
-            autocorrect=request.autocorrect,
-        )
+        if not request.skip_postprocess:
+            postprocess_transcription_outputs(
+                output_base=output_base,
+                split_on_punc=request.split_on_punc,
+                llm_correct=request.llm_correct,
+                llm_backend=request.llm_backend,
+                llm_model=request.llm_model,
+                llm_timeout_sec=request.llm_timeout_sec,
+                llm_glossary=request.llm_glossary,
+                autocorrect=request.autocorrect,
+            )

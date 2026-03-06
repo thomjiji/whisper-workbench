@@ -21,6 +21,7 @@ from src.whisper_utils import (
     get_model_path_by_variant,
     get_whisper_cli_path,
     list_audio_files,
+    postprocess_srt_txt_files,
 )
 
 LOG = logging.getLogger(__name__)
@@ -243,12 +244,43 @@ def cmd_transcribe(args: argparse.Namespace) -> None:
                 llm_model=args.llm_model,
                 llm_timeout_sec=args.llm_timeout_sec,
                 llm_glossary=llm_glossary,
+                skip_postprocess=args.skip_postprocess,
                 local_model_path=selected_model_path,
                 decode_options=decode_options,
                 groq_model=groq_model,
                 groq_timeout_sec=groq_timeout_sec,
             )
         )
+
+
+def cmd_postprocess(args: argparse.Namespace) -> None:
+    srt_path = Path(args.srt).expanduser().resolve()
+    txt_path = Path(args.txt).expanduser().resolve()
+
+    if not args.split_on_punc and not args.llm_correct and not args.autocorrect:
+        raise ValueError(
+            "No postprocess step selected. Use one or more of: "
+            "--split-on-punc --llm-correct --autocorrect."
+        )
+
+    llm_glossary: str | None = None
+    if args.llm_correct and args.glossary_file:
+        glossary_path = Path(args.glossary_file).resolve()
+        if not glossary_path.is_file():
+            raise FileNotFoundError(f"Glossary file not found: {glossary_path}")
+        llm_glossary = glossary_path.read_text(encoding="utf-8")
+
+    postprocess_srt_txt_files(
+        srt_path=srt_path,
+        txt_path=txt_path,
+        split_on_punc=args.split_on_punc,
+        llm_correct=args.llm_correct,
+        llm_backend=args.llm_backend,
+        llm_model=args.llm_model,
+        llm_timeout_sec=args.llm_timeout_sec,
+        llm_glossary=llm_glossary,
+        autocorrect=args.autocorrect,
+    )
 
 
 def cmd_convert(args: argparse.Namespace) -> None:
@@ -335,12 +367,36 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip autocorrect post-processing for generated .txt/.srt files.",
     )
+    transcribe_parser.add_argument(
+        "--skip-postprocess",
+        action="store_true",
+        help="Stop after transcription output (.srt/.txt) and skip all post-processing.",
+    )
     _add_backend_args(transcribe_parser)
     _add_local_backend_args(transcribe_parser)
     _add_groq_backend_args(transcribe_parser)
     _add_common_transcribe_args(transcribe_parser)
     _add_llm_args(transcribe_parser)
     transcribe_parser.set_defaults(func=cmd_transcribe)
+
+    postprocess_parser = subparsers.add_parser(
+        "postprocess",
+        description="Run selected post-processing steps on an existing SRT/TXT pair",
+    )
+    postprocess_parser.add_argument("--srt", required=True, help="Path to existing .srt file.")
+    postprocess_parser.add_argument("--txt", required=True, help="Path to existing .txt file.")
+    postprocess_parser.add_argument(
+        "--split-on-punc",
+        action="store_true",
+        help="Split SRT lines on punctuation and rewrite TXT to keep 1:1 alignment.",
+    )
+    postprocess_parser.add_argument(
+        "--autocorrect",
+        action="store_true",
+        help="Apply autocorrect to both TXT and SRT.",
+    )
+    _add_llm_args(postprocess_parser)
+    postprocess_parser.set_defaults(func=cmd_postprocess)
 
     convert_parser = subparsers.add_parser(
         "convert", description="Batch convert .wav files to 16khz mono PCM"

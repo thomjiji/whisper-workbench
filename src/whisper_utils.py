@@ -661,6 +661,38 @@ def _sync_srt_text_from_txt(srt_path: Path, txt_path: Path) -> None:
     srt_path.write_text("\n\n".join(blocks), encoding="utf-8")
 
 
+def _extract_srt_text_lines(srt_path: Path) -> list[str]:
+    raw = srt_path.read_text(encoding="utf-8", errors="replace").strip()
+    if not raw:
+        return []
+    lines: list[str] = []
+    blocks = raw.split("\n\n")
+    for block in blocks:
+        block_lines = [line for line in block.splitlines() if line.strip()]
+        if len(block_lines) >= 3 and " --> " in block_lines[1]:
+            lines.append(" ".join(block_lines[2:]).strip())
+    return lines
+
+
+def _extract_txt_text_lines(txt_path: Path) -> list[str]:
+    return [
+        line.strip()
+        for line in txt_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        if line.strip()
+    ]
+
+
+def _validate_srt_txt_line_alignment(srt_path: Path, txt_path: Path) -> None:
+    srt_lines = _extract_srt_text_lines(srt_path)
+    txt_lines = _extract_txt_text_lines(txt_path)
+    if len(srt_lines) != len(txt_lines):
+        raise RuntimeError(
+            "SRT/TXT line count mismatch before postprocess step: "
+            f"srt={len(srt_lines)} txt={len(txt_lines)}. "
+            "Please sync files first, or regenerate a consistent pair."
+        )
+
+
 def _split_srt_on_punctuation(srt_path: Path) -> list[str]:
     """Split each SRT segment by punctuation and redistribute timestamps."""
     if not srt_path.exists():
@@ -799,24 +831,56 @@ def postprocess_transcription_outputs(
     autocorrect: bool,
 ) -> None:
     """Apply optional post-processing steps for generated transcript files."""
+    postprocess_srt_txt_files(
+        srt_path=output_base.with_suffix(".srt"),
+        txt_path=output_base.with_suffix(".txt"),
+        split_on_punc=split_on_punc,
+        llm_correct=llm_correct,
+        llm_backend=llm_backend,
+        llm_model=llm_model,
+        llm_timeout_sec=llm_timeout_sec,
+        llm_glossary=llm_glossary,
+        autocorrect=autocorrect,
+    )
+
+
+def postprocess_srt_txt_files(
+    srt_path: Path,
+    txt_path: Path,
+    split_on_punc: bool,
+    llm_correct: bool,
+    llm_backend: str,
+    llm_model: str | None,
+    llm_timeout_sec: int,
+    llm_glossary: str | None,
+    autocorrect: bool,
+) -> None:
+    """Apply optional post-processing steps to an existing SRT/TXT pair."""
+    if not srt_path.is_file():
+        raise FileNotFoundError(f"SRT file not found: {srt_path}")
+    if not txt_path.is_file():
+        raise FileNotFoundError(f"TXT file not found: {txt_path}")
+
     if split_on_punc:
-        split_lines = _split_srt_on_punctuation(output_base.with_suffix(".srt"))
-        _rewrite_txt_from_lines(output_base.with_suffix(".txt"), split_lines)
+        split_lines = _split_srt_on_punctuation(srt_path)
+        _rewrite_txt_from_lines(txt_path, split_lines)
+
+    if llm_correct or autocorrect:
+        _validate_srt_txt_line_alignment(srt_path, txt_path)
+
     if llm_correct:
         llm_correct_file_in_place(
-            output_base.with_suffix(".txt"),
+            txt_path,
             backend=llm_backend,
             model=llm_model,
             timeout_sec=llm_timeout_sec,
             glossary=llm_glossary,
         )
-        _sync_srt_text_from_txt(
-            srt_path=output_base.with_suffix(".srt"),
-            txt_path=output_base.with_suffix(".txt"),
-        )
+        _sync_srt_text_from_txt(srt_path=srt_path, txt_path=txt_path)
+
     if autocorrect:
-        autocorrect_file_in_place(output_base.with_suffix(".txt"))
-        autocorrect_file_in_place(output_base.with_suffix(".srt"))
+        autocorrect_file_in_place(txt_path)
+        autocorrect_file_in_place(srt_path)
 
 
 def run_whisper_command(
@@ -844,6 +908,7 @@ def run_whisper_command(
     llm_model: str | None = None,
     llm_timeout_sec: int = 300,
     llm_glossary: str | None = None,
+    skip_postprocess: bool = False,
 ) -> None:
     """Run whisper command with dynamic output paths."""
     original_input_path = Path(audio_file).resolve()
@@ -930,16 +995,17 @@ def run_whisper_command(
         ) from exc
     else:
         output_base = Path(output_dir) / f"{file_name}_{lang}"
-        postprocess_transcription_outputs(
-            output_base=output_base,
-            split_on_punc=split_on_punc,
-            llm_correct=llm_correct,
-            llm_backend=llm_backend,
-            llm_model=llm_model,
-            llm_timeout_sec=llm_timeout_sec,
-            llm_glossary=llm_glossary,
-            autocorrect=autocorrect,
-        )
+        if not skip_postprocess:
+            postprocess_transcription_outputs(
+                output_base=output_base,
+                split_on_punc=split_on_punc,
+                llm_correct=llm_correct,
+                llm_backend=llm_backend,
+                llm_model=llm_model,
+                llm_timeout_sec=llm_timeout_sec,
+                llm_glossary=llm_glossary,
+                autocorrect=autocorrect,
+            )
     finally:
         if cleanup_temp_wav and input_for_whisper.exists():
             input_for_whisper.unlink()

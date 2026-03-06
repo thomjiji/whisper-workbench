@@ -146,6 +146,12 @@ uv run python main.py transcribe -i audio.wav -o ./output -l zh --decode-profile
 # Split subtitle lines on punctuation (useful for Chinese readability)
 uv run python main.py transcribe -i audio.wav -o ./output -l zh --split-on-punc
 
+# Stop after transcription (skip all post-processing)
+uv run python main.py transcribe -i audio.wav -o ./output -l zh --skip-postprocess
+
+# Re-run selected post-processing steps later on existing files
+uv run python main.py postprocess --srt ./output/audio_zh.srt --txt ./output/audio_zh.txt --llm-correct --autocorrect
+
 # Use Groq backend (requires GROQ_API_KEY; default model is whisper-large-v3)
 uv run python main.py transcribe -i audio.wav -o ./output -l zh --backend groq
 
@@ -209,6 +215,12 @@ Order and behavior details:
 - Step 4 (`--llm-correct`): run LLM correction on TXT first, then sync corrected TXT lines back into SRT (1:1).
 - Step 5 (default): run autocorrect on TXT and SRT unless `--no-autocorrect` is set.
 - Output: final `.srt` and `.txt` are the result of this ordered pipeline.
+
+Decoupled mode:
+
+- `transcribe --skip-postprocess`: only generate upstream `.srt/.txt` and stop before post-processing.
+- `postprocess --srt ... --txt ...`: run selected downstream steps on an existing SRT/TXT pair.
+- In `postprocess`, steps are opt-in (nothing runs unless you set step flags such as `--llm-correct`, `--autocorrect`, or `--split-on-punc`).
 
 ### LLM Correction Notes
 
