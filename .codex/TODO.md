@@ -1,9 +1,10 @@
 # TODO.md
 
 ## Now
-- [T-007] Add FFmpeg music-segment detector script with configurable dB thresholds.
+- (empty)
 
 ## Next
+- [T-008] Add quick examples for two-stage workflow (`transcribe --skip-postprocess` + `postprocess`) in helper scripts.
 - [T-004] Add backend smoke-test script under `scripts/`.
 - [T-003] Add punctuation split regression fixtures.
 
