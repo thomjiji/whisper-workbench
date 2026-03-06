@@ -30,13 +30,29 @@ def _add_llm_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--llm-correct",
         action="store_true",
-        help="Run Codex CLI post-correction to fix homophones and proper nouns.",
+        help="Run LLM CLI post-correction to fix homophones and proper nouns.",
+    )
+    parser.add_argument(
+        "--llm-backend",
+        type=str,
+        choices=["gemini", "claude", "codex"],
+        default="gemini",
+        help="LLM CLI backend for correction (default: gemini).",
     )
     parser.add_argument(
         "--llm-model",
         type=str,
-        default="haiku",
-        help="Claude model alias or full ID for LLM correction (default: haiku).",
+        default=None,
+        help=(
+            "Optional backend-specific model name. "
+            "If omitted, backend default is used."
+        ),
+    )
+    parser.add_argument(
+        "--llm-timeout-sec",
+        type=int,
+        default=300,
+        help="LLM correction request timeout in seconds (default: 300).",
     )
     parser.add_argument(
         "--glossary-file",
@@ -223,7 +239,9 @@ def cmd_transcribe(args: argparse.Namespace) -> None:
                 autocorrect=not args.no_autocorrect,
                 split_on_punc=args.split_on_punc,
                 llm_correct=args.llm_correct,
+                llm_backend=args.llm_backend,
                 llm_model=args.llm_model,
+                llm_timeout_sec=args.llm_timeout_sec,
                 llm_glossary=llm_glossary,
                 local_model_path=selected_model_path,
                 decode_options=decode_options,

@@ -206,13 +206,16 @@ Order and behavior details:
 - Step 1: Backend generates raw transcript segments and writes initial `.srt` and `.txt`.
 - Step 2 (`--split-on-punc`): split SRT lines on punctuation and redistribute timestamps.
 - Step 3 (`--split-on-punc`): rewrite TXT from split SRT lines so TXT and SRT stay line-aligned.
-- Step 4 (`--llm-correct`): run LLM correction on TXT first, then on SRT.
+- Step 4 (`--llm-correct`): run LLM correction on TXT first, then sync corrected TXT lines back into SRT (1:1).
 - Step 5 (default): run autocorrect on TXT and SRT unless `--no-autocorrect` is set.
 - Output: final `.srt` and `.txt` are the result of this ordered pipeline.
 
 ### LLM Correction Notes
 
 - `--llm-correct` applies line-by-line correction while preserving line count and order.
+- `--llm-backend` selects correction backend: `gemini` (default), `claude`, or `codex`.
+- `--llm-model` is backend-specific and optional. If omitted, backend default is used.
+- `--llm-timeout-sec` controls per-request timeout (default: `300` seconds).
 - Chinese text is normalized to Simplified Chinese in the LLM correction stage.
 - If `--glossary-file` is provided, glossary forms are treated as hard constraints and must be followed exactly.
 

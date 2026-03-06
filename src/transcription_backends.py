@@ -33,7 +33,9 @@ class TranscribeRequest:
     autocorrect: bool
     split_on_punc: bool
     llm_correct: bool
-    llm_model: str
+    llm_backend: str
+    llm_model: str | None
+    llm_timeout_sec: int
     llm_glossary: str | None
     local_model_path: str | None = None
     decode_options: dict[str, int | float | bool] | None = None
@@ -57,7 +59,9 @@ class LocalWhisperCppBackend:
             model_path=request.local_model_path,
             split_on_punc=request.split_on_punc,
             llm_correct=request.llm_correct,
+            llm_backend=request.llm_backend,
             llm_model=request.llm_model,
+            llm_timeout_sec=request.llm_timeout_sec,
             llm_glossary=request.llm_glossary,
             **decode_options,
         )
@@ -209,7 +213,9 @@ class GroqWhisperBackend:
             output_base=output_base,
             split_on_punc=request.split_on_punc,
             llm_correct=request.llm_correct,
+            llm_backend=request.llm_backend,
             llm_model=request.llm_model,
+            llm_timeout_sec=request.llm_timeout_sec,
             llm_glossary=request.llm_glossary,
             autocorrect=request.autocorrect,
         )

@@ -262,30 +262,118 @@ def _run_autocorrect_cli(file_path: Path) -> bool:
     return False
 
 
-def _call_claude(prompt: str, model: str = "haiku") -> str:
-    """Call claude -p non-interactively (stdin → stdout) and return the response."""
-    cmd = [
-        "claude", "--print",
-        "--model", model,
-        "--no-session-persistence",
-    ]
+def _default_llm_model_for_backend(backend: str) -> str | None:
+    if backend == "claude":
+        return "haiku"
+    return None
+
+
+def _run_llm_subprocess(
+    cmd: list[str],
+    prompt: str | None,
+    timeout_sec: int,
+    backend: str,
+) -> subprocess.CompletedProcess[bytes]:
     try:
-        result = subprocess.run(
+        return subprocess.run(
             cmd,
-            input=prompt.encode("utf-8"),
+            input=prompt.encode("utf-8") if prompt is not None else None,
             capture_output=True,
-            timeout=300,
+            timeout=timeout_sec,
         )
     except FileNotFoundError as exc:
-        raise RuntimeError("claude CLI not found.") from exc
+        raise RuntimeError(f"{backend} CLI not found in PATH.") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"{backend} request timed out after {timeout_sec} seconds."
+        ) from exc
+
+
+def _summarize_cli_error(stderr: bytes | str | None) -> str:
+    raw = _decode_stderr(stderr).strip()
+    if not raw:
+        return "(no stderr output)"
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    if not lines:
+        return "(no stderr output)"
+    preview = "\n".join(lines[:8])
+    if len(lines) > 8:
+        preview += "\n..."
+    return preview
+
+
+def _call_gemini(prompt: str, model: str | None, timeout_sec: int) -> str:
+    """Call gemini CLI in non-interactive mode."""
+    cmd = ["gemini", "--prompt", "", "--output-format", "text"]
+    if model:
+        cmd.extend(["--model", model])
+    result = _run_llm_subprocess(cmd, prompt, timeout_sec, backend="gemini")
     if result.returncode != 0:
-        raise RuntimeError(f"claude failed: {_decode_stderr(result.stderr).strip()}")
+        raise RuntimeError(f"gemini failed: {_summarize_cli_error(result.stderr)}")
     return result.stdout.decode("utf-8", errors="replace").strip()
+
+
+def _call_claude(prompt: str, model: str | None, timeout_sec: int) -> str:
+    """Call claude non-interactively (stdin -> stdout)."""
+    cmd = ["claude", "--print", "--no-session-persistence"]
+    if model:
+        cmd.extend(["--model", model])
+    result = _run_llm_subprocess(cmd, prompt, timeout_sec, backend="claude")
+    if result.returncode != 0:
+        raise RuntimeError(f"claude failed: {_summarize_cli_error(result.stderr)}")
+    return result.stdout.decode("utf-8", errors="replace").strip()
+
+
+def _call_codex(prompt: str, model: str | None, timeout_sec: int) -> str:
+    """Call codex exec non-interactively and return the final message."""
+    with tempfile.NamedTemporaryFile(prefix="codex_last_", suffix=".txt", delete=False) as f:
+        output_path = Path(f.name)
+
+    cmd = [
+        "codex",
+        "exec",
+        "-",
+        "--skip-git-repo-check",
+        "--output-last-message",
+        str(output_path),
+    ]
+    if model:
+        cmd.extend(["--model", model])
+
+    try:
+        result = _run_llm_subprocess(cmd, prompt, timeout_sec, backend="codex")
+        if result.returncode != 0:
+            raise RuntimeError(f"codex failed: {_summarize_cli_error(result.stderr)}")
+        if output_path.exists():
+            output = output_path.read_text(encoding="utf-8", errors="replace").strip()
+            if output:
+                return output
+        return result.stdout.decode("utf-8", errors="replace").strip()
+    finally:
+        output_path.unlink(missing_ok=True)
+
+
+def _call_llm_cli(
+    prompt: str,
+    backend: str,
+    model: str | None,
+    timeout_sec: int,
+) -> str:
+    effective_model = model or _default_llm_model_for_backend(backend)
+    if backend == "gemini":
+        return _call_gemini(prompt, effective_model, timeout_sec)
+    if backend == "claude":
+        return _call_claude(prompt, effective_model, timeout_sec)
+    if backend == "codex":
+        return _call_codex(prompt, effective_model, timeout_sec)
+    raise ValueError(f"Unsupported llm backend: {backend}")
 
 
 def _llm_correct_lines(
     lines: list[str],
-    model: str,
+    backend: str,
+    model: str | None,
+    timeout_sec: int,
     glossary: str | None = None,
 ) -> list[str]:
     """Use an LLM to fix homophone errors and proper noun inconsistencies."""
@@ -327,7 +415,12 @@ def _llm_correct_lines(
     prompt_parts.append(numbered)
     prompt = "".join(prompt_parts)
 
-    raw = _call_claude(prompt, model)
+    raw = _call_llm_cli(
+        prompt=prompt,
+        backend=backend,
+        model=model,
+        timeout_sec=timeout_sec,
+    )
 
     corrected: dict[int, str] = {}
     for line in raw.splitlines():
@@ -348,7 +441,9 @@ def _llm_correct_lines(
 
 def llm_correct_file_in_place(
     file_path: Path,
-    model: str,
+    backend: str,
+    model: str | None,
+    timeout_sec: int,
     glossary: str | None = None,
 ) -> None:
     """Apply LLM correction in-place to a .txt or .srt file."""
@@ -364,7 +459,13 @@ def llm_correct_file_in_place(
         if not non_empty_indices:
             return
         content_lines = [all_lines[i] for i in non_empty_indices]
-        corrected_lines = _llm_correct_lines(content_lines, model, glossary)
+        corrected_lines = _llm_correct_lines(
+            content_lines,
+            backend=backend,
+            model=model,
+            timeout_sec=timeout_sec,
+            glossary=glossary,
+        )
         for idx, corrected in zip(non_empty_indices, corrected_lines):
             all_lines[idx] = corrected
         file_path.write_text("\n".join(all_lines), encoding="utf-8")
@@ -387,7 +488,13 @@ def llm_correct_file_in_place(
                 valid_block_indices.append(i)
         if not texts:
             return
-        corrected_texts = _llm_correct_lines(texts, model, glossary)
+        corrected_texts = _llm_correct_lines(
+            texts,
+            backend=backend,
+            model=model,
+            timeout_sec=timeout_sec,
+            glossary=glossary,
+        )
         for block_idx, corrected_text in zip(valid_block_indices, corrected_texts):
             block_lines = blocks[block_idx].splitlines()
             blocks[block_idx] = "\n".join(block_lines[:2] + [corrected_text])
@@ -518,6 +625,40 @@ def _rewrite_txt_from_lines(txt_path: Path, lines: list[str]) -> None:
     if not lines:
         return
     txt_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _sync_srt_text_from_txt(srt_path: Path, txt_path: Path) -> None:
+    """Overwrite SRT text lines from TXT lines with strict 1:1 alignment checks."""
+    if not srt_path.exists() or not txt_path.exists():
+        raise FileNotFoundError(f"SRT/TXT not found for sync: {srt_path} {txt_path}")
+
+    txt_lines = [
+        line.strip()
+        for line in txt_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        if line.strip()
+    ]
+    raw = srt_path.read_text(encoding="utf-8", errors="replace").strip()
+    if not raw:
+        return
+
+    blocks = raw.split("\n\n")
+    valid_block_indices: list[int] = []
+    for i, block in enumerate(blocks):
+        block_lines = [line for line in block.splitlines() if line.strip()]
+        if len(block_lines) >= 3 and " --> " in block_lines[1]:
+            valid_block_indices.append(i)
+
+    if len(txt_lines) != len(valid_block_indices):
+        raise RuntimeError(
+            "Cannot sync TXT -> SRT: line count mismatch "
+            f"(txt={len(txt_lines)} srt={len(valid_block_indices)})."
+        )
+
+    for idx, block_idx in enumerate(valid_block_indices):
+        block_lines = [line for line in blocks[block_idx].splitlines() if line.strip()]
+        blocks[block_idx] = "\n".join(block_lines[:2] + [txt_lines[idx]])
+
+    srt_path.write_text("\n\n".join(blocks), encoding="utf-8")
 
 
 def _split_srt_on_punctuation(srt_path: Path) -> list[str]:
@@ -651,7 +792,9 @@ def postprocess_transcription_outputs(
     output_base: Path,
     split_on_punc: bool,
     llm_correct: bool,
-    llm_model: str,
+    llm_backend: str,
+    llm_model: str | None,
+    llm_timeout_sec: int,
     llm_glossary: str | None,
     autocorrect: bool,
 ) -> None:
@@ -660,8 +803,17 @@ def postprocess_transcription_outputs(
         split_lines = _split_srt_on_punctuation(output_base.with_suffix(".srt"))
         _rewrite_txt_from_lines(output_base.with_suffix(".txt"), split_lines)
     if llm_correct:
-        llm_correct_file_in_place(output_base.with_suffix(".txt"), llm_model, llm_glossary)
-        llm_correct_file_in_place(output_base.with_suffix(".srt"), llm_model, llm_glossary)
+        llm_correct_file_in_place(
+            output_base.with_suffix(".txt"),
+            backend=llm_backend,
+            model=llm_model,
+            timeout_sec=llm_timeout_sec,
+            glossary=llm_glossary,
+        )
+        _sync_srt_text_from_txt(
+            srt_path=output_base.with_suffix(".srt"),
+            txt_path=output_base.with_suffix(".txt"),
+        )
     if autocorrect:
         autocorrect_file_in_place(output_base.with_suffix(".txt"))
         autocorrect_file_in_place(output_base.with_suffix(".srt"))
@@ -688,7 +840,9 @@ def run_whisper_command(
     vad_model_path: str | None = None,
     split_on_punc: bool = False,
     llm_correct: bool = False,
-    llm_model: str = "haiku",
+    llm_backend: str = "gemini",
+    llm_model: str | None = None,
+    llm_timeout_sec: int = 300,
     llm_glossary: str | None = None,
 ) -> None:
     """Run whisper command with dynamic output paths."""
@@ -780,7 +934,9 @@ def run_whisper_command(
             output_base=output_base,
             split_on_punc=split_on_punc,
             llm_correct=llm_correct,
+            llm_backend=llm_backend,
             llm_model=llm_model,
+            llm_timeout_sec=llm_timeout_sec,
             llm_glossary=llm_glossary,
             autocorrect=autocorrect,
         )
