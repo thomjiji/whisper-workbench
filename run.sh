@@ -1,0 +1,12 @@
+uv run main transcribe \
+  -i "usage/geekshootjack/连接音乐Wi-Fi-杨海崧/source/杨海崧-音频_first10m.mp3" \
+  -o "usage/geekshootjack/连接音乐Wi-Fi-杨海崧/output/full_transcribe" \
+  -l zh \
+  --backend local \
+  --local-model turbo \
+  --split-on-punc \
+  --llm-correct \
+  --llm-backend gemini \
+  --llm-timeout-sec 600 \
+  --no-autocorrect \
+  --glossary-file "usage/geekshootjack/连接音乐Wi-Fi-杨海崧/docs/glossary_full.txt"
