@@ -4,21 +4,12 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import shutil
 import subprocess
 import tempfile
-import json
-import hashlib
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
 
 LOG = logging.getLogger(__name__)
-LLM_CORRECT_CHUNK_SIZE = 150
-LLM_CORRECT_MAX_RETRIES = 1
-LLM_CORRECT_MIN_CHUNK_SIZE = 50
-LLM_CORRECT_MAX_WORKERS = 4
 
 
 def _decode_stderr(stderr: bytes | str | None) -> str:
@@ -54,109 +45,74 @@ def _candidate_whisper_cli_paths(base_dir: Path) -> list[Path]:
 
 def get_whisper_cli_path() -> Path:
     """Get path to whisper-cli binary from env, PATH, or local build."""
-    whisper_cli_path = os.environ.get("WHISPER_CLI_PATH")
-    if whisper_cli_path:
-        path = Path(whisper_cli_path).expanduser().resolve()
-        _ensure_file_readable(path, "whisper-cli executable")
-        return path
+    env_path = os.environ.get("WHISPER_CLI_PATH")
+    if env_path:
+        return Path(env_path).expanduser().resolve()
 
-    whisper_cli_in_path = shutil.which("whisper-cli")
-    if whisper_cli_in_path:
-        return Path(whisper_cli_in_path).resolve()
+    which_result = shutil.which("whisper-cli")
+    if which_result:
+        return Path(which_result)
 
-    whisper_cpp_dir = os.environ.get(
-        "WHISPER_CPP_DIR",
-        Path(__file__).resolve().parent.parent / "vendor" / "whisper.cpp",
-    )
-    base_dir = Path(whisper_cpp_dir).expanduser().resolve()
-    cli_candidates = _candidate_whisper_cli_paths(base_dir)
-    for candidate in cli_candidates:
-        if candidate.exists():
-            _ensure_file_readable(candidate, "whisper-cli executable")
+    base_dir = Path(__file__).resolve().parent.parent
+    for candidate in _candidate_whisper_cli_paths(base_dir):
+        if candidate.is_file():
             return candidate
 
     raise FileNotFoundError(
-        "whisper-cli executable not found. Tried:\n"
-        + "\n".join(str(p) for p in cli_candidates)
-        + "\nRun setup first or set WHISPER_CLI_PATH."
+        "whisper-cli not found. Set WHISPER_CLI_PATH, add it to PATH, "
+        "or build whisper.cpp in the project root."
     )
 
 
 def get_model_path() -> Path:
-    """Get path to whisper model from env or local defaults."""
-    model_path = os.environ.get("WHISPER_MODEL_PATH")
-    if model_path:
-        resolved = Path(model_path).expanduser().resolve()
-        _ensure_file_readable(resolved, "Whisper model file")
-        return resolved
+    """Get the default Whisper model path."""
+    env_path = os.environ.get("WHISPER_MODEL_PATH")
+    if env_path:
+        return Path(env_path).expanduser().resolve()
 
-    whisper_cpp_dir = os.environ.get(
-        "WHISPER_CPP_DIR",
-        Path(__file__).resolve().parent.parent / "vendor" / "whisper.cpp",
-    )
-    models_dir = Path(whisper_cpp_dir).expanduser().resolve() / "models"
-    candidates = [
-        models_dir / "ggml-large-v3.bin",
-        models_dir / "ggml-large-v3-turbo.bin",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            _ensure_file_readable(candidate, "Whisper model file")
-            return candidate
+    base_dir = Path(__file__).resolve().parent.parent
+    default = base_dir / "models" / "ggml-large-v3-turbo.bin"
+    if default.is_file():
+        return default
 
     raise FileNotFoundError(
-        "No default Whisper model found. Expected one of:\n"
-        + "\n".join(str(path) for path in candidates)
-        + "\nRun setup first, or provide --model/--model-path, or set WHISPER_MODEL_PATH."
+        "Whisper model not found. Set WHISPER_MODEL_PATH or place model at "
+        f"{default}"
     )
 
 
-def get_model_path_by_variant(model_variant: str) -> Path:
-    """Resolve model path by variant using WHISPER_CPP_DIR or default vendor path."""
-    whisper_cpp_dir = os.environ.get(
-        "WHISPER_CPP_DIR",
-        Path(__file__).resolve().parent.parent / "vendor" / "whisper.cpp",
+def get_model_path_by_variant(variant: str) -> Path:
+    """Get a Whisper model path by variant name (e.g. 'large-v3-turbo')."""
+    env_path = os.environ.get("WHISPER_MODEL_PATH")
+    if env_path:
+        return Path(env_path).expanduser().resolve()
+
+    base_dir = Path(__file__).resolve().parent.parent
+    model_file = base_dir / "models" / f"ggml-{variant}.bin"
+    if model_file.is_file():
+        return model_file
+
+    raise FileNotFoundError(
+        f"Whisper model variant '{variant}' not found. "
+        f"Expected at {model_file}. Set WHISPER_MODEL_PATH to override."
     )
-    normalized = model_variant.strip().lower()
-    if normalized in {"large-v3", "v3"}:
-        model_name = "ggml-large-v3.bin"
-    elif normalized in {"large-v3-turbo", "turbo"}:
-        model_name = "ggml-large-v3-turbo.bin"
-    elif normalized == "medium":
-        model_name = "ggml-medium.bin"
-    elif normalized == "medium.en":
-        model_name = "ggml-medium.en.bin"
-    elif normalized == "small":
-        model_name = "ggml-small.bin"
-    elif normalized == "small.en":
-        model_name = "ggml-small.en.bin"
-    else:
-        raise ValueError(
-            f"Unsupported model variant: {model_variant}. "
-            "Use large-v3/v3, large-v3-turbo/turbo, medium[/medium.en], or small[/small.en]."
-        )
-    resolved = Path(whisper_cpp_dir).expanduser().resolve() / "models" / model_name
-    _ensure_file_readable(resolved, f"Whisper model file for variant '{model_variant}'")
-    return resolved
 
 
 def get_vad_model_path() -> Path:
-    """Get path to whisper.cpp VAD model from env or local default."""
-    vad_model_path = os.environ.get("WHISPER_VAD_MODEL_PATH")
-    if vad_model_path:
-        resolved = Path(vad_model_path).expanduser().resolve()
-        _ensure_file_readable(resolved, "Whisper VAD model file")
-        return resolved
+    """Get the VAD model path."""
+    env_path = os.environ.get("WHISPER_VAD_MODEL_PATH")
+    if env_path:
+        return Path(env_path).expanduser().resolve()
 
-    whisper_cpp_dir = os.environ.get(
-        "WHISPER_CPP_DIR",
-        Path(__file__).resolve().parent.parent / "vendor" / "whisper.cpp",
+    base_dir = Path(__file__).resolve().parent.parent
+    default = base_dir / "models" / "silero_vad.onnx"
+    if default.is_file():
+        return default
+
+    raise FileNotFoundError(
+        "VAD model not found. Set WHISPER_VAD_MODEL_PATH or place model at "
+        f"{default}"
     )
-    candidate = (
-        Path(whisper_cpp_dir).expanduser().resolve() / "models" / "ggml-silero-v5.1.2.bin"
-    )
-    _ensure_file_readable(candidate, "Whisper VAD model file")
-    return candidate
 
 
 def remove_16khz_suffix(audio_file: str) -> str:
@@ -269,412 +225,6 @@ def _run_autocorrect_cli(file_path: Path) -> bool:
     return False
 
 
-def _default_llm_model_for_backend(backend: str) -> str | None:
-    if backend == "claude":
-        return "haiku"
-    return None
-
-
-def _run_llm_subprocess(
-    cmd: list[str],
-    prompt: str | None,
-    timeout_sec: int,
-    backend: str,
-) -> subprocess.CompletedProcess[bytes]:
-    try:
-        return subprocess.run(
-            cmd,
-            input=prompt.encode("utf-8") if prompt is not None else None,
-            capture_output=True,
-            timeout=timeout_sec,
-        )
-    except FileNotFoundError as exc:
-        raise RuntimeError(f"{backend} CLI not found in PATH.") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(
-            f"{backend} request timed out after {timeout_sec} seconds."
-        ) from exc
-
-
-def _summarize_cli_error(stderr: bytes | str | None) -> str:
-    raw = _decode_stderr(stderr).strip()
-    if not raw:
-        return "(no stderr output)"
-    lines = [line.strip() for line in raw.splitlines() if line.strip()]
-    if not lines:
-        return "(no stderr output)"
-    preview = "\n".join(lines[:8])
-    if len(lines) > 8:
-        preview += "\n..."
-    return preview
-
-
-def _call_gemini(prompt: str, model: str | None, timeout_sec: int) -> str:
-    """Call gemini CLI in non-interactive mode."""
-    cmd = ["gemini", "--prompt", "", "--output-format", "text"]
-    if model:
-        cmd.extend(["--model", model])
-    result = _run_llm_subprocess(cmd, prompt, timeout_sec, backend="gemini")
-    if result.returncode != 0:
-        raise RuntimeError(f"gemini failed: {_summarize_cli_error(result.stderr)}")
-    return result.stdout.decode("utf-8", errors="replace").strip()
-
-
-def _call_claude(prompt: str, model: str | None, timeout_sec: int) -> str:
-    """Call claude non-interactively (stdin -> stdout)."""
-    cmd = ["claude", "--print", "--no-session-persistence"]
-    if model:
-        cmd.extend(["--model", model])
-    result = _run_llm_subprocess(cmd, prompt, timeout_sec, backend="claude")
-    if result.returncode != 0:
-        raise RuntimeError(f"claude failed: {_summarize_cli_error(result.stderr)}")
-    return result.stdout.decode("utf-8", errors="replace").strip()
-
-
-def _call_codex(prompt: str, model: str | None, timeout_sec: int) -> str:
-    """Call codex exec non-interactively and return the final message."""
-    with tempfile.NamedTemporaryFile(prefix="codex_last_", suffix=".txt", delete=False) as f:
-        output_path = Path(f.name)
-
-    cmd = [
-        "codex",
-        "exec",
-        "-",
-        "--skip-git-repo-check",
-        "--output-last-message",
-        str(output_path),
-    ]
-    if model:
-        cmd.extend(["--model", model])
-
-    try:
-        result = _run_llm_subprocess(cmd, prompt, timeout_sec, backend="codex")
-        if result.returncode != 0:
-            raise RuntimeError(f"codex failed: {_summarize_cli_error(result.stderr)}")
-        if output_path.exists():
-            output = output_path.read_text(encoding="utf-8", errors="replace").strip()
-            if output:
-                return output
-        return result.stdout.decode("utf-8", errors="replace").strip()
-    finally:
-        output_path.unlink(missing_ok=True)
-
-
-def _call_llm_cli(
-    prompt: str,
-    backend: str,
-    model: str | None,
-    timeout_sec: int,
-) -> str:
-    effective_model = model or _default_llm_model_for_backend(backend)
-    if backend == "gemini":
-        return _call_gemini(prompt, effective_model, timeout_sec)
-    if backend == "claude":
-        return _call_claude(prompt, effective_model, timeout_sec)
-    if backend == "codex":
-        return _call_codex(prompt, effective_model, timeout_sec)
-    raise ValueError(f"Unsupported llm backend: {backend}")
-
-
-def _ordered_llm_backends(primary_backend: str) -> list[str]:
-    all_backends = ["gemini", "codex", "claude"]
-    ordered = [primary_backend]
-    ordered.extend(backend for backend in all_backends if backend != primary_backend)
-    return ordered
-
-
-def _extract_json_payload(raw: str) -> dict[str, Any]:
-    text = raw.strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        if len(lines) >= 3 and lines[-1].strip() == "```":
-            text = "\n".join(lines[1:-1]).strip()
-            if text.lower().startswith("json"):
-                text = text[4:].strip()
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        raise ValueError("LLM response did not contain a JSON object.")
-    return json.loads(text[start : end + 1])
-
-
-def _build_llm_correct_prompt(
-    lines: list[str],
-    glossary: str | None = None,
-    line_offset: int = 1,
-) -> str:
-    payload = {
-        "lines": [{"id": i + line_offset, "text": line} for i, line in enumerate(lines)],
-    }
-    prompt_parts = [
-        "ROLE:\n"
-        "You are a transcript correction assistant for Chinese transcripts.\n\n"
-        "GOAL:\n"
-        "Review each line. Return ONLY the lines that need correction.\n"
-        "If a line is already correct, do NOT include it in your response.\n"
-        "Return an empty corrections list if nothing needs changing.\n\n"
-        "OUTPUT FORMAT (必须严格遵守):\n"
-        '{"corrections":[{"id":<int>,"text":"<corrected_text>"}]}\n'
-        "- Return ONLY valid JSON. No markdown, no explanation.\n"
-        "- Return ONLY lines you are changing.\n"
-        "- The \"id\" must be one of the input line IDs.\n"
-        "- Do NOT invent new IDs. Do NOT merge lines. Do NOT split lines.\n\n"
-        "CORRECTION RULES:\n"
-        "- Fix homophones and misrecognition errors (同音字与误识别纠错).\n"
-        "- Normalize proper nouns (e.g. deep mind -> DeepMind, open ai -> OpenAI).\n"
-        "- Convert Traditional Chinese to Simplified Chinese (繁体→简体).\n"
-        "- Keep numbers, punctuation, non-Chinese tokens unless clearly wrong.\n\n"
-    ]
-    if glossary:
-        prompt_parts.append(
-            "GLOSSARY OVERRIDE (最高优先级):\n"
-            "Match any glossary term and normalize to the exact listed form.\n"
-            "Glossary rules override all other normalization choices.\n\n"
-            f"Glossary:\n{glossary}\n\n"
-        )
-    prompt_parts.append("INPUT:\n")
-    prompt_parts.append(json.dumps(payload, ensure_ascii=False))
-    return "".join(prompt_parts)
-
-
-def _apply_llm_corrections_patch(
-    raw: str,
-    input_lines: list[str],
-    line_offset: int,
-) -> list[str]:
-    """Parse LLM response as a patch, apply to originals.
-
-    Returns corrected lines. Never raises on missing/extra lines.
-    """
-    payload = _extract_json_payload(raw)
-    corrections = payload.get("corrections", [])
-    if not isinstance(corrections, list):
-        raise ValueError("LLM response JSON missing `corrections` array.")
-
-    valid_ids = set(range(line_offset, line_offset + len(input_lines)))
-    result = list(input_lines)
-
-    seen_ids: set[int] = set()
-    for item in corrections:
-        if not isinstance(item, dict):
-            continue
-        item_id = item.get("id")
-        item_text = item.get("text")
-        if not isinstance(item_id, int) or not isinstance(item_text, str):
-            continue
-        if item_id not in valid_ids:
-            LOG.warning(
-                "LLM returned invalid id %s (valid range %d-%d), skipping",
-                item_id,
-                line_offset,
-                line_offset + len(input_lines) - 1,
-            )
-            continue
-        if item_id in seen_ids:
-            LOG.warning("LLM returned duplicate id %s, skipping", item_id)
-            continue
-        seen_ids.add(item_id)
-        result[item_id - line_offset] = item_text.strip()
-
-    LOG.info("LLM applied %d corrections out of %d lines", len(seen_ids), len(input_lines))
-    return result
-
-
-def _llm_correct_lines_once(
-    lines: list[str],
-    backend: str,
-    model: str | None,
-    timeout_sec: int,
-    glossary: str | None = None,
-    line_offset: int = 1,
-) -> list[str]:
-    if not lines:
-        return []
-    prompt = _build_llm_correct_prompt(lines, glossary=glossary, line_offset=line_offset)
-    raw = _call_llm_cli(
-        prompt=prompt,
-        backend=backend,
-        model=model,
-        timeout_sec=timeout_sec,
-    )
-    return _apply_llm_corrections_patch(raw, input_lines=lines, line_offset=line_offset)
-
-
-def _llm_correct_lines_chunked(
-    lines: list[str],
-    backend: str,
-    model: str | None,
-    timeout_sec: int,
-    glossary: str | None = None,
-    chunk_size: int = LLM_CORRECT_CHUNK_SIZE,
-) -> tuple[list[str], int]:
-    total = len(lines)
-    chunk_size = max(1, chunk_size)
-    chunk_list = [
-        (start, min(start + chunk_size, total), lines[start : min(start + chunk_size, total)])
-        for start in range(0, total, chunk_size)
-    ]
-    total_chunks = len(chunk_list)
-
-    def process_chunk(args: tuple[int, tuple[int, int, list[str]]]) -> tuple[int, list[str] | None]:
-        chunk_idx, (start, end, chunk) = args
-        LOG.info(
-            "LLM correction batch %d/%d: lines %d-%d",
-            chunk_idx,
-            total_chunks,
-            start + 1,
-            end,
-        )
-        chunk_corrected: list[str] | None = None
-        for attempt in range(1, LLM_CORRECT_MAX_RETRIES + 2):
-            try:
-                chunk_corrected = _llm_correct_lines_once(
-                    lines=chunk,
-                    backend=backend,
-                    model=model,
-                    timeout_sec=timeout_sec,
-                    glossary=glossary,
-                    line_offset=start + 1,
-                )
-                break
-            except (ValueError, json.JSONDecodeError) as exc:
-                LOG.warning(
-                    "LLM chunk JSON parse failed (%s attempt %d/2 lines %d-%d): %s",
-                    backend,
-                    attempt,
-                    start + 1,
-                    end,
-                    exc,
-                )
-        return start, chunk_corrected
-
-    results: dict[int, list[str] | None] = {}
-    with ThreadPoolExecutor(max_workers=LLM_CORRECT_MAX_WORKERS) as executor:
-        for start, result in executor.map(process_chunk, enumerate(chunk_list, start=1)):
-            results[start] = result
-
-    corrected: list[str] = []
-    failures = 0
-    for start, end, chunk in chunk_list:
-        result = results[start]
-        if result is None:
-            failures += 1
-            corrected.extend(chunk)
-        else:
-            corrected.extend(result)
-    return corrected, failures
-
-
-def _llm_correct_lines(
-    lines: list[str],
-    backend: str,
-    model: str | None,
-    timeout_sec: int,
-    glossary: str | None = None,
-) -> tuple[list[str], str]:
-    """Return corrected lines and status: applied|partial_applied|fallback_kept_original."""
-    if not lines:
-        return [], "applied"
-
-    total_chunks = (len(lines) + LLM_CORRECT_CHUNK_SIZE - 1) // LLM_CORRECT_CHUNK_SIZE
-
-    for backend_name in _ordered_llm_backends(backend):
-        corrected_chunked, failures = _llm_correct_lines_chunked(
-            lines=lines,
-            backend=backend_name,
-            model=model,
-            timeout_sec=timeout_sec,
-            glossary=glossary,
-        )
-        if failures == 0:
-            LOG.info("LLM correction applied via %s in chunked mode.", backend_name)
-            return corrected_chunked, "applied"
-        if failures < max(1, total_chunks):
-            LOG.warning(
-                "LLM correction partially applied via %s; %d chunk(s) kept original.",
-                backend_name,
-                failures,
-            )
-            return corrected_chunked, "partial_applied"
-        LOG.warning(
-            "LLM chunked mode failed for backend %s; trying next backend.",
-            backend_name,
-        )
-
-    LOG.warning("LLM correction fallback_kept_original: all backends failed.")
-    return lines, "fallback_kept_original"
-
-
-def llm_correct_file_in_place(
-    file_path: Path,
-    backend: str,
-    model: str | None,
-    timeout_sec: int,
-    glossary: str | None = None,
-) -> None:
-    """Apply LLM correction in-place to a .txt or .srt file."""
-    if not file_path.exists():
-        LOG.warning("LLM correct skipped; file not found: %s", file_path)
-        return
-
-    suffix = file_path.suffix.lower()
-
-    if suffix == ".txt":
-        all_lines = file_path.read_text(encoding="utf-8").splitlines()
-        original_lines = list(all_lines)
-        non_empty_indices = [i for i, line in enumerate(all_lines) if line.strip()]
-        if not non_empty_indices:
-            return
-        content_lines = [all_lines[i] for i in non_empty_indices]
-        corrected_lines, status = _llm_correct_lines(
-            content_lines,
-            backend=backend,
-            model=model,
-            timeout_sec=timeout_sec,
-            glossary=glossary,
-        )
-        for idx, corrected in zip(non_empty_indices, corrected_lines):
-            all_lines[idx] = corrected
-        file_path.write_text("\n".join(all_lines), encoding="utf-8")
-        if all_lines == original_lines:
-            LOG.info("LLM correction %s with no text changes: %s", status, file_path)
-        else:
-            LOG.info("LLM correction %s: %s", status, file_path)
-
-    elif suffix == ".srt":
-        raw = file_path.read_text(encoding="utf-8", errors="replace").strip()
-        if not raw:
-            return
-        blocks = raw.split("\n\n")
-        texts: list[str] = []
-        valid_block_indices: list[int] = []
-        for i, block in enumerate(blocks):
-            block_lines = block.splitlines()
-            if len(block_lines) < 3 or " --> " not in block_lines[1]:
-                continue
-            text = " ".join(line.strip() for line in block_lines[2:]).strip()
-            if text:
-                texts.append(text)
-                valid_block_indices.append(i)
-        if not texts:
-            return
-        corrected_texts, status = _llm_correct_lines(
-            texts,
-            backend=backend,
-            model=model,
-            timeout_sec=timeout_sec,
-            glossary=glossary,
-        )
-        for block_idx, corrected_text in zip(valid_block_indices, corrected_texts):
-            block_lines = blocks[block_idx].splitlines()
-            blocks[block_idx] = "\n".join(block_lines[:2] + [corrected_text])
-        file_path.write_text("\n\n".join(blocks), encoding="utf-8")
-        LOG.info("LLM correction %s: %s", status, file_path)
-
-    else:
-        LOG.warning("LLM correct: unsupported file type %s, skipping", file_path.suffix)
-
-
 def autocorrect_file_in_place(file_path: Path) -> None:
     """Run autocorrect in-place for a single file if tooling is available."""
     if not file_path.exists():
@@ -734,451 +284,6 @@ def convert_audio_to_16khz(audio_path: Path) -> None:
             input_file.unlink()
 
 
-def _parse_srt_time_to_ms(value: str) -> int:
-    hhmmss, ms_part = value.split(",")
-    hh, mm, ss = hhmmss.split(":")
-    return (int(hh) * 3600 + int(mm) * 60 + int(ss)) * 1000 + int(ms_part)
-
-
-def _format_ms_to_srt(ms: int) -> str:
-    ms = max(ms, 0)
-    hh = ms // 3_600_000
-    ms %= 3_600_000
-    mm = ms // 60_000
-    ms %= 60_000
-    ss = ms // 1_000
-    ms %= 1_000
-    return f"{hh:02d}:{mm:02d}:{ss:02d},{ms:03d}"
-
-
-def _split_text_on_punctuation(text: str) -> list[str]:
-    chunks: list[str] = []
-    current = ""
-    for i, ch in enumerate(text):
-        current += ch
-
-        should_split = False
-        prev_ch = text[i - 1] if i > 0 else ""
-        next_ch = text[i + 1] if i + 1 < len(text) else ""
-
-        if ch in "，。！？；：":
-            should_split = True
-        elif ch in "!?;:":
-            should_split = True
-        elif ch == ",":
-            # Keep numeric groups intact: 1,000 / 2024,12
-            should_split = not (prev_ch.isdigit() and next_ch.isdigit())
-        elif ch == ".":
-            # Do not split decimals or dot-connected tokens: 1.0 / e.g. / U.S.
-            is_decimal = prev_ch.isdigit() and next_ch.isdigit()
-            is_dot_token = prev_ch.isalpha() and next_ch.isalpha()
-            should_split = not (is_decimal or is_dot_token)
-
-        if should_split:
-            piece = current.strip()
-            if piece:
-                chunks.append(piece)
-            current = ""
-    tail = current.strip()
-    if tail:
-        chunks.append(tail)
-    return chunks if chunks else [text.strip()]
-
-
-def _strip_trailing_punctuation(text: str) -> str:
-    """Remove trailing punctuation marks from a subtitle line."""
-    return re.sub(r"[，。！？；：,.!?;:]+$", "", text).strip()
-
-
-def _rewrite_txt_from_lines(txt_path: Path, lines: list[str]) -> None:
-    """Rewrite TXT as one line per subtitle segment to keep 1:1 mapping with SRT."""
-    if not lines:
-        return
-    txt_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def _sync_srt_text_from_txt(srt_path: Path, txt_path: Path) -> None:
-    """Overwrite SRT text lines from TXT lines with strict 1:1 alignment checks."""
-    if not srt_path.exists() or not txt_path.exists():
-        raise FileNotFoundError(f"SRT/TXT not found for sync: {srt_path} {txt_path}")
-
-    txt_lines = [
-        line.strip()
-        for line in txt_path.read_text(encoding="utf-8", errors="replace").splitlines()
-        if line.strip()
-    ]
-    raw = srt_path.read_text(encoding="utf-8", errors="replace").strip()
-    if not raw:
-        return
-
-    blocks = raw.split("\n\n")
-    valid_block_indices: list[int] = []
-    for i, block in enumerate(blocks):
-        block_lines = [line for line in block.splitlines() if line.strip()]
-        if len(block_lines) >= 3 and " --> " in block_lines[1]:
-            valid_block_indices.append(i)
-
-    if len(txt_lines) != len(valid_block_indices):
-        srt_text_lines = _extract_srt_text_lines(srt_path)
-        detail = _format_line_mismatch_detail(srt_text_lines=srt_text_lines, txt_lines=txt_lines)
-        raise RuntimeError(
-            "Cannot sync TXT -> SRT: line count mismatch "
-            f"(txt={len(txt_lines)} srt={len(valid_block_indices)}). {detail}"
-        )
-
-    for idx, block_idx in enumerate(valid_block_indices):
-        block_lines = [line for line in blocks[block_idx].splitlines() if line.strip()]
-        blocks[block_idx] = "\n".join(block_lines[:2] + [txt_lines[idx]])
-
-    srt_path.write_text("\n\n".join(blocks), encoding="utf-8")
-
-
-def _extract_srt_text_lines(srt_path: Path) -> list[str]:
-    raw = srt_path.read_text(encoding="utf-8", errors="replace").strip()
-    if not raw:
-        return []
-    lines: list[str] = []
-    blocks = raw.split("\n\n")
-    for block in blocks:
-        block_lines = [line for line in block.splitlines() if line.strip()]
-        if len(block_lines) >= 3 and " --> " in block_lines[1]:
-            lines.append(" ".join(block_lines[2:]).strip())
-    return lines
-
-
-def _extract_txt_text_lines(txt_path: Path) -> list[str]:
-    return [
-        line.strip()
-        for line in txt_path.read_text(encoding="utf-8", errors="replace").splitlines()
-        if line.strip()
-    ]
-
-
-def _format_line_mismatch_detail(srt_text_lines: list[str], txt_lines: list[str]) -> str:
-    first_mismatch = min(len(srt_text_lines), len(txt_lines))
-    for idx in range(first_mismatch):
-        if srt_text_lines[idx] != txt_lines[idx]:
-            first_mismatch = idx
-            break
-    line_no = first_mismatch + 1
-    srt_preview = srt_text_lines[first_mismatch] if first_mismatch < len(srt_text_lines) else "<missing>"
-    txt_preview = txt_lines[first_mismatch] if first_mismatch < len(txt_lines) else "<missing>"
-    return f"first mismatch line={line_no} srt='{srt_preview}' txt='{txt_preview}'"
-
-
-def _validate_srt_txt_line_alignment(srt_path: Path, txt_path: Path) -> None:
-    srt_lines = _extract_srt_text_lines(srt_path)
-    txt_lines = _extract_txt_text_lines(txt_path)
-    if len(srt_lines) != len(txt_lines):
-        detail = _format_line_mismatch_detail(srt_text_lines=srt_lines, txt_lines=txt_lines)
-        raise RuntimeError(
-            "SRT/TXT line count mismatch before postprocess step: "
-            f"srt={len(srt_lines)} txt={len(txt_lines)}. "
-            f"{detail}. Please sync files first, or regenerate a consistent pair."
-        )
-
-
-def _split_srt_on_punctuation(srt_path: Path) -> list[str]:
-    """Split each SRT segment by punctuation and redistribute timestamps."""
-    if not srt_path.exists():
-        return []
-
-    raw = srt_path.read_text(encoding="utf-8", errors="replace").strip()
-    if not raw:
-        return []
-
-    blocks = raw.split("\n\n")
-    out_entries: list[tuple[str, str]] = []
-
-    for block in blocks:
-        lines = block.splitlines()
-        if len(lines) < 3:
-            continue
-
-        timing_line = lines[1].strip()
-        if " --> " not in timing_line:
-            continue
-        start_str, end_str = timing_line.split(" --> ")
-        start_ms = _parse_srt_time_to_ms(start_str)
-        end_ms = _parse_srt_time_to_ms(end_str)
-        if end_ms <= start_ms:
-            continue
-
-        text = " ".join(line.strip() for line in lines[2:]).strip()
-        if not text:
-            continue
-
-        raw_pieces = _split_text_on_punctuation(text)
-        pieces = [p for p in (_strip_trailing_punctuation(x) for x in raw_pieces) if p]
-        if len(pieces) == 1:
-            single = pieces[0]
-            if single:
-                out_entries.append((timing_line, single))
-            continue
-
-        weights = [max(1, len(piece.replace(" ", ""))) for piece in pieces]
-        total = sum(weights)
-        span = end_ms - start_ms
-        cumulative = 0
-        for i, piece in enumerate(pieces):
-            piece_start = start_ms + (span * cumulative) // total
-            cumulative += weights[i]
-            piece_end = start_ms + (span * cumulative) // total
-            if i == len(pieces) - 1:
-                piece_end = end_ms
-            if piece_end <= piece_start:
-                continue
-            out_entries.append(
-                (
-                    f"{_format_ms_to_srt(piece_start)} --> {_format_ms_to_srt(piece_end)}",
-                    piece,
-                )
-            )
-
-    # Merge adjacent duplicate text entries when they overlap/touch.
-    deduped: list[tuple[str, str]] = []
-    for timing, text in out_entries:
-        if not deduped:
-            deduped.append((timing, text))
-            continue
-
-        prev_timing, prev_text = deduped[-1]
-        prev_start_s, prev_end_s = prev_timing.split(" --> ")
-        cur_start_s, cur_end_s = timing.split(" --> ")
-        prev_end_ms = _parse_srt_time_to_ms(prev_end_s)
-        cur_start_ms = _parse_srt_time_to_ms(cur_start_s)
-        cur_end_ms = _parse_srt_time_to_ms(cur_end_s)
-
-        if prev_text == text and cur_start_ms <= prev_end_ms + 80:
-            merged_timing = f"{prev_start_s} --> {_format_ms_to_srt(max(prev_end_ms, cur_end_ms))}"
-            deduped[-1] = (merged_timing, prev_text)
-        else:
-            deduped.append((timing, text))
-
-    rendered: list[str] = []
-    for idx, (timing, text) in enumerate(deduped, start=1):
-        rendered.append(str(idx))
-        rendered.append(timing)
-        rendered.append(text)
-        rendered.append("")
-
-    if rendered:
-        srt_path.write_text("\n".join(rendered), encoding="utf-8")
-    return [text for _, text in deduped]
-
-
-def _normalize_segment_text(segment: dict[str, Any]) -> str:
-    text = str(segment.get("text", "")).strip()
-    return re.sub(r"\s+", " ", text)
-
-
-def write_srt_txt_from_segments(output_base: Path, segments: list[dict[str, Any]]) -> None:
-    """Write SRT and TXT files from transcription segments."""
-    if not segments:
-        raise ValueError("No transcription segments available to render outputs.")
-
-    srt_lines: list[str] = []
-    txt_lines: list[str] = []
-    segment_index = 1
-
-    for segment in segments:
-        text = _normalize_segment_text(segment)
-        if not text:
-            continue
-
-        start_s = float(segment.get("start", 0.0))
-        end_s = float(segment.get("end", start_s))
-        start_ms = max(0, int(round(start_s * 1000)))
-        end_ms = max(start_ms + 1, int(round(end_s * 1000)))
-
-        srt_lines.append(str(segment_index))
-        srt_lines.append(f"{_format_ms_to_srt(start_ms)} --> {_format_ms_to_srt(end_ms)}")
-        srt_lines.append(text)
-        srt_lines.append("")
-        txt_lines.append(text)
-        segment_index += 1
-
-    if not txt_lines:
-        raise ValueError("Transcription segments were present but contained no usable text.")
-
-    output_base.with_suffix(".srt").write_text("\n".join(srt_lines), encoding="utf-8")
-    output_base.with_suffix(".txt").write_text("\n".join(txt_lines) + "\n", encoding="utf-8")
-
-
-def _default_postprocess_state_path(srt_path: Path) -> Path:
-    return srt_path.with_suffix(".postprocess_state.json")
-
-
-def _compute_postprocess_pair_hash(srt_path: Path, txt_path: Path) -> str:
-    hasher = hashlib.sha256()
-    hasher.update(srt_path.read_bytes())
-    hasher.update(b"\n--PAIR-SEP--\n")
-    hasher.update(txt_path.read_bytes())
-    return hasher.hexdigest()
-
-
-def _read_postprocess_state(state_path: Path) -> dict[str, Any]:
-    if not state_path.exists():
-        return {}
-    try:
-        return json.loads(state_path.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        return {}
-
-
-def _write_postprocess_state(state_path: Path, state: dict[str, Any]) -> None:
-    state_path.write_text(
-        json.dumps(state, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-
-
-def _selected_postprocess_steps(
-    split_on_punc: bool,
-    llm_correct: bool,
-    autocorrect: bool,
-) -> list[str]:
-    steps: list[str] = []
-    if split_on_punc:
-        steps.append("split")
-    if llm_correct:
-        steps.append("llm_correct_txt")
-        steps.append("sync_txt_to_srt")
-    if autocorrect:
-        steps.append("autocorrect")
-    return steps
-
-
-def postprocess_transcription_outputs(
-    output_base: Path,
-    split_on_punc: bool,
-    llm_correct: bool,
-    llm_backend: str,
-    llm_model: str | None,
-    llm_timeout_sec: int,
-    llm_glossary: str | None,
-    autocorrect: bool,
-    resume: bool = False,
-    from_step: str | None = None,
-    to_step: str | None = None,
-) -> None:
-    """Apply optional post-processing steps for generated transcript files."""
-    postprocess_srt_txt_files(
-        srt_path=output_base.with_suffix(".srt"),
-        txt_path=output_base.with_suffix(".txt"),
-        split_on_punc=split_on_punc,
-        llm_correct=llm_correct,
-        llm_backend=llm_backend,
-        llm_model=llm_model,
-        llm_timeout_sec=llm_timeout_sec,
-        llm_glossary=llm_glossary,
-        autocorrect=autocorrect,
-        resume=resume,
-        from_step=from_step,
-        to_step=to_step,
-    )
-
-
-def postprocess_srt_txt_files(
-    srt_path: Path,
-    txt_path: Path,
-    split_on_punc: bool,
-    llm_correct: bool,
-    llm_backend: str,
-    llm_model: str | None,
-    llm_timeout_sec: int,
-    llm_glossary: str | None,
-    autocorrect: bool,
-    resume: bool = False,
-    from_step: str | None = None,
-    to_step: str | None = None,
-) -> None:
-    """Apply optional post-processing steps to an existing SRT/TXT pair."""
-    if not srt_path.is_file():
-        raise FileNotFoundError(f"SRT file not found: {srt_path}")
-    if not txt_path.is_file():
-        raise FileNotFoundError(f"TXT file not found: {txt_path}")
-
-    steps = _selected_postprocess_steps(
-        split_on_punc=split_on_punc,
-        llm_correct=llm_correct,
-        autocorrect=autocorrect,
-    )
-    if not steps:
-        return
-
-    state_path = _default_postprocess_state_path(srt_path)
-    pair_hash = _compute_postprocess_pair_hash(srt_path, txt_path)
-    state = _read_postprocess_state(state_path) if resume else {}
-    completed_steps = [str(x) for x in state.get("completed_steps", [])]
-
-    if resume and state and state.get("pair_hash") not in {None, pair_hash}:
-        LOG.warning(
-            "Resume requested but state hash differs from current files; starting fresh state."
-        )
-        completed_steps = []
-
-    selected_steps = steps
-    if from_step:
-        if from_step not in selected_steps:
-            raise ValueError(f"--from-step '{from_step}' is not part of selected postprocess steps.")
-        selected_steps = selected_steps[selected_steps.index(from_step) :]
-    if to_step:
-        if to_step not in selected_steps:
-            raise ValueError(f"--to-step '{to_step}' is not part of selected postprocess steps.")
-        selected_steps = selected_steps[: selected_steps.index(to_step) + 1]
-
-    if resume:
-        selected_steps = [step for step in selected_steps if step not in completed_steps]
-
-    state = {
-        "pair_hash": pair_hash,
-        "completed_steps": completed_steps,
-        "selected_steps": selected_steps,
-        "status": "running",
-        "last_step": completed_steps[-1] if completed_steps else None,
-    }
-    _write_postprocess_state(state_path, state)
-
-    try:
-        for step in selected_steps:
-            LOG.info("Postprocess step: %s", step)
-            if step == "split":
-                split_lines = _split_srt_on_punctuation(srt_path)
-                _rewrite_txt_from_lines(txt_path, split_lines)
-            elif step == "llm_correct_txt":
-                _validate_srt_txt_line_alignment(srt_path, txt_path)
-                llm_correct_file_in_place(
-                    txt_path,
-                    backend=llm_backend,
-                    model=llm_model,
-                    timeout_sec=llm_timeout_sec,
-                    glossary=llm_glossary,
-                )
-            elif step == "sync_txt_to_srt":
-                _validate_srt_txt_line_alignment(srt_path, txt_path)
-                _sync_srt_text_from_txt(srt_path=srt_path, txt_path=txt_path)
-            elif step == "autocorrect":
-                _validate_srt_txt_line_alignment(srt_path, txt_path)
-                autocorrect_file_in_place(txt_path)
-                autocorrect_file_in_place(srt_path)
-            else:
-                raise ValueError(f"Unknown postprocess step: {step}")
-
-            state["completed_steps"] = [*state.get("completed_steps", []), step]
-            state["last_step"] = step
-            state["pair_hash"] = _compute_postprocess_pair_hash(srt_path, txt_path)
-            _write_postprocess_state(state_path, state)
-    except Exception:  # noqa: BLE001
-        state["status"] = "failed"
-        _write_postprocess_state(state_path, state)
-        raise
-
-    state["status"] = "done"
-    state["pair_hash"] = _compute_postprocess_pair_hash(srt_path, txt_path)
-    _write_postprocess_state(state_path, state)
-
-
 def run_whisper_command(
     audio_file: str,
     lang: str,
@@ -1207,6 +312,8 @@ def run_whisper_command(
     skip_postprocess: bool = False,
 ) -> None:
     """Run whisper command with dynamic output paths."""
+    from src.postprocess import postprocess_transcription_outputs
+
     original_input_path = Path(audio_file).resolve()
     file_name = remove_16khz_suffix(str(original_input_path))
     input_for_whisper = original_input_path

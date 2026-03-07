@@ -14,6 +14,7 @@ from src.transcription_backends import (
     LocalWhisperCppBackend,
     TranscribeRequest,
 )
+from src.postprocess import postprocess_srt_txt_files
 from src.whisper_utils import (
     batch_run_whisper_command,
     convert_audio_to_16khz,
@@ -21,7 +22,6 @@ from src.whisper_utils import (
     get_model_path_by_variant,
     get_whisper_cli_path,
     list_audio_files,
-    postprocess_srt_txt_files,
 )
 
 LOG = logging.getLogger(__name__)

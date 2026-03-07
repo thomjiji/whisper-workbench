@@ -12,12 +12,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from src.whisper_utils import (
-    postprocess_transcription_outputs,
-    remove_16khz_suffix,
-    run_whisper_command,
-    write_srt_txt_from_segments,
-)
+from src.postprocess import postprocess_transcription_outputs
+from src.srt_utils import write_srt_txt_from_segments
+from src.whisper_utils import remove_16khz_suffix, run_whisper_command
 
 GROQ_TRANSCRIPTIONS_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 
