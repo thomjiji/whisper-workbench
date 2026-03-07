@@ -19,9 +19,10 @@ dev = [
 
 [project.scripts]
 main = "main:main"
+wb-setup = "scripts.setup_whisper_cpp:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src"]
+packages = ["src", "scripts"]
 include = ["main.py"]
 
 [tool.ruff]
