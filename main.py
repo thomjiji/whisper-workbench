@@ -27,7 +27,7 @@ from src.whisper_utils import (
 LOG = logging.getLogger(__name__)
 
 
-def _add_llm_args(parser: argparse.ArgumentParser) -> None:
+def _add_llm_args(parser: argparse._ActionsContainer) -> None:
     parser.add_argument(
         "--llm-correct",
         action="store_true",
@@ -62,7 +62,7 @@ def _add_llm_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _add_backend_args(parser: argparse.ArgumentParser) -> None:
+def _add_backend_args(parser: argparse._ActionsContainer) -> None:
     parser.add_argument(
         "--backend",
         choices=["local", "groq"],
@@ -71,7 +71,7 @@ def _add_backend_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _add_common_transcribe_args(parser: argparse.ArgumentParser) -> None:
+def _add_common_transcribe_args(parser: argparse._ActionsContainer) -> None:
     parser.add_argument(
         "--split-on-punc",
         action="store_true",
@@ -79,7 +79,7 @@ def _add_common_transcribe_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _add_local_backend_args(parser: argparse.ArgumentParser) -> None:
+def _add_local_backend_args(parser: argparse._ActionsContainer) -> None:
     parser.add_argument(
         "--local-model",
         type=str,
@@ -111,7 +111,7 @@ def _add_local_backend_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _add_groq_backend_args(parser: argparse.ArgumentParser) -> None:
+def _add_groq_backend_args(parser: argparse._ActionsContainer) -> None:
     parser.add_argument(
         "--groq-model",
         type=str,
@@ -337,8 +337,11 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe_parser = subparsers.add_parser(
         "transcribe",
         description="Transcribe audio files via local whisper.cpp or Groq backend",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    transcribe_parser.add_argument(
+
+    inputs_grp = transcribe_parser.add_argument_group("inputs")
+    inputs_grp.add_argument(
         "-i",
         "--input",
         type=str,
@@ -346,40 +349,47 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Path to audio file(s) to process.",
     )
-    transcribe_parser.add_argument(
+    inputs_grp.add_argument(
         "-o",
         "--output",
         type=str,
         required=True,
         help="Output directory for transcription files.",
     )
-    transcribe_parser.add_argument(
+    inputs_grp.add_argument(
         "-l",
         "--lang",
         type=str,
         default="en",
         help="Language code (default: en).",
     )
-    transcribe_parser.add_argument(
+
+    backend_grp = transcribe_parser.add_argument_group("backend")
+    _add_backend_args(backend_grp)
+    _add_local_backend_args(backend_grp)
+    _add_groq_backend_args(backend_grp)
+
+    postproc_grp = transcribe_parser.add_argument_group("post-processing")
+    postproc_grp.add_argument(
         "--prompt-file",
         type=str,
         help="Path to a UTF-8 text file used as the initial prompt.",
     )
-    transcribe_parser.add_argument(
+    _add_common_transcribe_args(postproc_grp)
+    postproc_grp.add_argument(
         "--no-autocorrect",
         action="store_true",
         help="Skip autocorrect post-processing for generated .txt/.srt files.",
     )
-    transcribe_parser.add_argument(
+    postproc_grp.add_argument(
         "--skip-postprocess",
         action="store_true",
         help="Stop after transcription output (.srt/.txt) and skip all post-processing.",
     )
-    _add_backend_args(transcribe_parser)
-    _add_local_backend_args(transcribe_parser)
-    _add_groq_backend_args(transcribe_parser)
-    _add_common_transcribe_args(transcribe_parser)
-    _add_llm_args(transcribe_parser)
+
+    llm_grp = transcribe_parser.add_argument_group("llm correction")
+    _add_llm_args(llm_grp)
+
     transcribe_parser.set_defaults(func=cmd_transcribe)
 
     postprocess_parser = subparsers.add_parser(
