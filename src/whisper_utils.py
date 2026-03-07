@@ -14,8 +14,8 @@ from pathlib import Path
 from typing import Any
 
 LOG = logging.getLogger(__name__)
-LLM_CORRECT_CHUNK_SIZE = 400
-LLM_CORRECT_MAX_RETRIES = 2
+LLM_CORRECT_CHUNK_SIZE = 150
+LLM_CORRECT_MAX_RETRIES = 1
 LLM_CORRECT_MIN_CHUNK_SIZE = 50
 
 
@@ -406,71 +406,76 @@ def _build_llm_correct_prompt(
     }
     prompt_parts = [
         "ROLE:\n"
-        "You are a transcript correction assistant for Chinese interview transcripts.\n\n"
+        "You are a transcript correction assistant for Chinese transcripts.\n\n"
         "GOAL:\n"
-        "Correct each line while preserving meaning and sentence boundaries.\n\n"
-        "HARD CONSTRAINTS (必须严格遵守):\n"
-        "1) Return ONLY valid JSON in this exact schema:\n"
-        '{"lines":[{"id":<int>,"text":"<corrected_text>"}]}\n'
-        "2) Keep EXACTLY the same number of items and same ids.\n"
-        "3) Do NOT merge or split lines.\n"
-        "4) No extra keys, no markdown, no explanations.\n\n"
-        "NORMALIZATION RULES:\n"
-        "- Fix obvious homophone/misrecognition errors (同音字与误识别纠错).\n"
-        "- Normalize proper nouns/brand names to official casing and spacing.\n"
-        "  Example: deep mind -> DeepMind, open ai -> OpenAI.\n"
-        "- Convert Traditional Chinese to Simplified Chinese for all Chinese text (繁体统一转简体).\n"
-        "- Keep numbers, punctuation, and non-Chinese tokens unless correction is clearly needed.\n"
-        "- If a line is already correct, keep it unchanged.\n\n"
+        "Review each line. Return ONLY the lines that need correction.\n"
+        "If a line is already correct, do NOT include it in your response.\n"
+        "Return an empty corrections list if nothing needs changing.\n\n"
+        "OUTPUT FORMAT (必须严格遵守):\n"
+        '{"corrections":[{"id":<int>,"text":"<corrected_text>"}]}\n'
+        "- Return ONLY valid JSON. No markdown, no explanation.\n"
+        "- Return ONLY lines you are changing.\n"
+        "- The \"id\" must be one of the input line IDs.\n"
+        "- Do NOT invent new IDs. Do NOT merge lines. Do NOT split lines.\n\n"
+        "CORRECTION RULES:\n"
+        "- Fix homophones and misrecognition errors (同音字与误识别纠错).\n"
+        "- Normalize proper nouns (e.g. deep mind -> DeepMind, open ai -> OpenAI).\n"
+        "- Convert Traditional Chinese to Simplified Chinese (繁体→简体).\n"
+        "- Keep numbers, punctuation, non-Chinese tokens unless clearly wrong.\n\n"
     ]
     if glossary:
         prompt_parts.append(
             "GLOSSARY OVERRIDE (最高优先级):\n"
-            "If any glossary term or alias appears in a line, you MUST normalize it to the\n"
-            "exact glossary form. Glossary rules override other stylistic choices.\n"
-            "Do not invent alternatives when glossary specifies a form.\n\n"
-            f"Glossary 词汇表 (use these exact forms):\n{glossary}\n\n"
+            "Match any glossary term and normalize to the exact listed form.\n"
+            "Glossary rules override all other normalization choices.\n\n"
+            f"Glossary:\n{glossary}\n\n"
         )
-    prompt_parts.append("INPUT JSON:\n")
+    prompt_parts.append("INPUT:\n")
     prompt_parts.append(json.dumps(payload, ensure_ascii=False))
     return "".join(prompt_parts)
 
 
-def _parse_llm_corrected_lines(
+def _apply_llm_corrections_patch(
     raw: str,
-    expected_ids: list[int],
-    original_by_id: dict[int, str],
+    input_lines: list[str],
+    line_offset: int,
 ) -> list[str]:
-    data = _extract_json_payload(raw)
-    items = data.get("lines") if isinstance(data, dict) else None
-    if isinstance(data, list):
-        items = data
-    if not isinstance(items, list):
-        raise ValueError("LLM response JSON missing `lines` array.")
+    """Parse LLM response as a patch, apply to originals.
 
-    parsed: dict[int, str] = {}
-    for item in items:
+    Returns corrected lines. Never raises on missing/extra lines.
+    """
+    payload = _extract_json_payload(raw)
+    corrections = payload.get("corrections", [])
+    if not isinstance(corrections, list):
+        raise ValueError("LLM response JSON missing `corrections` array.")
+
+    valid_ids = set(range(line_offset, line_offset + len(input_lines)))
+    result = list(input_lines)
+
+    seen_ids: set[int] = set()
+    for item in corrections:
         if not isinstance(item, dict):
-            raise ValueError("LLM response line item is not an object.")
-        line_id = item.get("id")
-        text = item.get("text")
-        if not isinstance(line_id, int):
-            raise ValueError("LLM response line id is not int.")
-        if not isinstance(text, str):
-            raise ValueError("LLM response line text is not string.")
-        if line_id in parsed:
-            raise ValueError(f"LLM response has duplicate id: {line_id}")
-        parsed[line_id] = text.strip()
+            continue
+        item_id = item.get("id")
+        item_text = item.get("text")
+        if not isinstance(item_id, int) or not isinstance(item_text, str):
+            continue
+        if item_id not in valid_ids:
+            LOG.warning(
+                "LLM returned invalid id %s (valid range %d-%d), skipping",
+                item_id,
+                line_offset,
+                line_offset + len(input_lines) - 1,
+            )
+            continue
+        if item_id in seen_ids:
+            LOG.warning("LLM returned duplicate id %s, skipping", item_id)
+            continue
+        seen_ids.add(item_id)
+        result[item_id - line_offset] = item_text.strip()
 
-    if set(parsed.keys()) != set(expected_ids):
-        missing = sorted(set(expected_ids) - set(parsed.keys()))
-        extra = sorted(set(parsed.keys()) - set(expected_ids))
-        raise ValueError(
-            "LLM response ids mismatch. "
-            f"missing={missing[:5]} extra={extra[:5]}"
-        )
-
-    return [parsed.get(line_id, original_by_id[line_id]) for line_id in expected_ids]
+    LOG.info("LLM applied %d corrections out of %d lines", len(seen_ids), len(input_lines))
+    return result
 
 
 def _llm_correct_lines_once(
@@ -490,9 +495,7 @@ def _llm_correct_lines_once(
         model=model,
         timeout_sec=timeout_sec,
     )
-    expected_ids = [line_offset + i for i in range(len(lines))]
-    original_by_id = {line_offset + i: line for i, line in enumerate(lines)}
-    return _parse_llm_corrected_lines(raw, expected_ids=expected_ids, original_by_id=original_by_id)
+    return _apply_llm_corrections_patch(raw, input_lines=lines, line_offset=line_offset)
 
 
 def _llm_correct_lines_chunked(
@@ -520,7 +523,8 @@ def _llm_correct_lines_chunked(
             end,
         )
         chunk_corrected: list[str] | None = None
-        for attempt in range(1, LLM_CORRECT_MAX_RETRIES + 1):
+        # Retry once on JSON parse failure only
+        for attempt in range(1, LLM_CORRECT_MAX_RETRIES + 2):
             try:
                 chunk_corrected = _llm_correct_lines_once(
                     lines=chunk,
@@ -531,12 +535,11 @@ def _llm_correct_lines_chunked(
                     line_offset=start + 1,
                 )
                 break
-            except Exception as exc:  # noqa: BLE001
+            except (ValueError, json.JSONDecodeError) as exc:
                 LOG.warning(
-                    "LLM chunk failed (%s attempt %d/%d lines %d-%d): %s",
+                    "LLM chunk JSON parse failed (%s attempt %d/2 lines %d-%d): %s",
                     backend,
                     attempt,
-                    LLM_CORRECT_MAX_RETRIES,
                     start + 1,
                     end,
                     exc,
@@ -560,45 +563,30 @@ def _llm_correct_lines(
     if not lines:
         return [], "applied"
 
+    total_chunks = (len(lines) + LLM_CORRECT_CHUNK_SIZE - 1) // LLM_CORRECT_CHUNK_SIZE
+
     for backend_name in _ordered_llm_backends(backend):
-        try:
-            corrected = _llm_correct_lines_once(
-                lines=lines,
-                backend=backend_name,
-                model=model,
-                timeout_sec=timeout_sec,
-                glossary=glossary,
-                line_offset=1,
-            )
-            LOG.info("LLM correction applied via %s in single request.", backend_name)
-            return corrected, "applied"
-        except Exception as exc:  # noqa: BLE001
+        corrected_chunked, failures = _llm_correct_lines_chunked(
+            lines=lines,
+            backend=backend_name,
+            model=model,
+            timeout_sec=timeout_sec,
+            glossary=glossary,
+        )
+        if failures == 0:
+            LOG.info("LLM correction applied via %s in chunked mode.", backend_name)
+            return corrected_chunked, "applied"
+        if failures < max(1, total_chunks):
             LOG.warning(
-                "LLM single request failed (%s): %s; falling back to chunked mode.",
+                "LLM correction partially applied via %s; %d chunk(s) kept original.",
                 backend_name,
-                exc,
+                failures,
             )
-            corrected_chunked, failures = _llm_correct_lines_chunked(
-                lines=lines,
-                backend=backend_name,
-                model=model,
-                timeout_sec=timeout_sec,
-                glossary=glossary,
-            )
-            if failures == 0:
-                LOG.info("LLM correction applied via %s in chunked mode.", backend_name)
-                return corrected_chunked, "applied"
-            if failures < max(1, (len(lines) + LLM_CORRECT_CHUNK_SIZE - 1) // LLM_CORRECT_CHUNK_SIZE):
-                LOG.warning(
-                    "LLM correction partially applied via %s; %d chunk(s) kept original.",
-                    backend_name,
-                    failures,
-                )
-                return corrected_chunked, "partial_applied"
-            LOG.warning(
-                "LLM chunked mode failed for backend %s; trying next backend.",
-                backend_name,
-            )
+            return corrected_chunked, "partial_applied"
+        LOG.warning(
+            "LLM chunked mode failed for backend %s; trying next backend.",
+            backend_name,
+        )
 
     LOG.warning("LLM correction fallback_kept_original: all backends failed.")
     return lines, "fallback_kept_original"
