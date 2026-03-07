@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import json
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ LOG = logging.getLogger(__name__)
 LLM_CORRECT_CHUNK_SIZE = 150
 LLM_CORRECT_MAX_RETRIES = 1
 LLM_CORRECT_MIN_CHUNK_SIZE = 50
+LLM_CORRECT_MAX_WORKERS = 4
 
 
 def _decode_stderr(stderr: bytes | str | None) -> str:
@@ -506,15 +508,16 @@ def _llm_correct_lines_chunked(
     glossary: str | None = None,
     chunk_size: int = LLM_CORRECT_CHUNK_SIZE,
 ) -> tuple[list[str], int]:
-    corrected: list[str] = []
-    failures = 0
     total = len(lines)
     chunk_size = max(1, chunk_size)
-    total_chunks = (total + chunk_size - 1) // chunk_size
+    chunk_list = [
+        (start, min(start + chunk_size, total), lines[start : min(start + chunk_size, total)])
+        for start in range(0, total, chunk_size)
+    ]
+    total_chunks = len(chunk_list)
 
-    for chunk_idx, start in enumerate(range(0, total, chunk_size), start=1):
-        end = min(start + chunk_size, total)
-        chunk = lines[start:end]
+    def process_chunk(args: tuple[int, tuple[int, int, list[str]]]) -> tuple[int, list[str] | None]:
+        chunk_idx, (start, end, chunk) = args
         LOG.info(
             "LLM correction batch %d/%d: lines %d-%d",
             chunk_idx,
@@ -523,7 +526,6 @@ def _llm_correct_lines_chunked(
             end,
         )
         chunk_corrected: list[str] | None = None
-        # Retry once on JSON parse failure only
         for attempt in range(1, LLM_CORRECT_MAX_RETRIES + 2):
             try:
                 chunk_corrected = _llm_correct_lines_once(
@@ -544,11 +546,22 @@ def _llm_correct_lines_chunked(
                     end,
                     exc,
                 )
-        if chunk_corrected is None:
+        return start, chunk_corrected
+
+    results: dict[int, list[str] | None] = {}
+    with ThreadPoolExecutor(max_workers=LLM_CORRECT_MAX_WORKERS) as executor:
+        for start, result in executor.map(process_chunk, enumerate(chunk_list, start=1)):
+            results[start] = result
+
+    corrected: list[str] = []
+    failures = 0
+    for start, end, chunk in chunk_list:
+        result = results[start]
+        if result is None:
             failures += 1
             corrected.extend(chunk)
-            continue
-        corrected.extend(chunk_corrected)
+        else:
+            corrected.extend(result)
     return corrected, failures
 
 
