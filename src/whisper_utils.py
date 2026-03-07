@@ -8,10 +8,15 @@ import re
 import shutil
 import subprocess
 import tempfile
+import json
+import hashlib
 from pathlib import Path
 from typing import Any
 
 LOG = logging.getLogger(__name__)
+LLM_CORRECT_CHUNK_SIZE = 400
+LLM_CORRECT_MAX_RETRIES = 2
+LLM_CORRECT_MIN_CHUNK_SIZE = 50
 
 
 def _decode_stderr(stderr: bytes | str | None) -> str:
@@ -369,25 +374,47 @@ def _call_llm_cli(
     raise ValueError(f"Unsupported llm backend: {backend}")
 
 
-def _llm_correct_lines(
+def _ordered_llm_backends(primary_backend: str) -> list[str]:
+    all_backends = ["gemini", "codex", "claude"]
+    ordered = [primary_backend]
+    ordered.extend(backend for backend in all_backends if backend != primary_backend)
+    return ordered
+
+
+def _extract_json_payload(raw: str) -> dict[str, Any]:
+    text = raw.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if len(lines) >= 3 and lines[-1].strip() == "```":
+            text = "\n".join(lines[1:-1]).strip()
+            if text.lower().startswith("json"):
+                text = text[4:].strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError("LLM response did not contain a JSON object.")
+    return json.loads(text[start : end + 1])
+
+
+def _build_llm_correct_prompt(
     lines: list[str],
-    backend: str,
-    model: str | None,
-    timeout_sec: int,
     glossary: str | None = None,
-) -> list[str]:
-    """Use an LLM to fix homophone errors and proper noun inconsistencies."""
-    numbered = "\n".join(f"{i + 1}. {line}" for i, line in enumerate(lines))
+    line_offset: int = 1,
+) -> str:
+    payload = {
+        "lines": [{"id": i + line_offset, "text": line} for i, line in enumerate(lines)],
+    }
     prompt_parts = [
         "ROLE:\n"
         "You are a transcript correction assistant for Chinese interview transcripts.\n\n"
         "GOAL:\n"
         "Correct each line while preserving meaning and sentence boundaries.\n\n"
         "HARD CONSTRAINTS (必须严格遵守):\n"
-        "1) Return EXACTLY the same number of lines in the same order.\n"
-        "2) Do NOT merge or split lines.\n"
-        "3) Output ONLY a numbered list in this format: N. corrected text\n"
-        "4) No explanations, no extra headings, no markdown.\n\n"
+        "1) Return ONLY valid JSON in this exact schema:\n"
+        '{"lines":[{"id":<int>,"text":"<corrected_text>"}]}\n'
+        "2) Keep EXACTLY the same number of items and same ids.\n"
+        "3) Do NOT merge or split lines.\n"
+        "4) No extra keys, no markdown, no explanations.\n\n"
         "NORMALIZATION RULES:\n"
         "- Fix obvious homophone/misrecognition errors (同音字与误识别纠错).\n"
         "- Normalize proper nouns/brand names to official casing and spacing.\n"
@@ -404,39 +431,177 @@ def _llm_correct_lines(
             "Do not invent alternatives when glossary specifies a form.\n\n"
             f"Glossary 词汇表 (use these exact forms):\n{glossary}\n\n"
         )
-    prompt_parts.append(
-        "SELF-CHECK BEFORE OUTPUT (do not print this checklist):\n"
-        "- Line count unchanged\n"
-        "- Numbering complete from 1..N\n"
-        "- Chinese text is simplified\n"
-        "- Glossary terms strictly enforced (if provided)\n\n"
-        "INPUT:\n"
-    )
-    prompt_parts.append(numbered)
-    prompt = "".join(prompt_parts)
+    prompt_parts.append("INPUT JSON:\n")
+    prompt_parts.append(json.dumps(payload, ensure_ascii=False))
+    return "".join(prompt_parts)
 
+
+def _parse_llm_corrected_lines(
+    raw: str,
+    expected_ids: list[int],
+    original_by_id: dict[int, str],
+) -> list[str]:
+    data = _extract_json_payload(raw)
+    items = data.get("lines") if isinstance(data, dict) else None
+    if isinstance(data, list):
+        items = data
+    if not isinstance(items, list):
+        raise ValueError("LLM response JSON missing `lines` array.")
+
+    parsed: dict[int, str] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("LLM response line item is not an object.")
+        line_id = item.get("id")
+        text = item.get("text")
+        if not isinstance(line_id, int):
+            raise ValueError("LLM response line id is not int.")
+        if not isinstance(text, str):
+            raise ValueError("LLM response line text is not string.")
+        if line_id in parsed:
+            raise ValueError(f"LLM response has duplicate id: {line_id}")
+        parsed[line_id] = text.strip()
+
+    if set(parsed.keys()) != set(expected_ids):
+        missing = sorted(set(expected_ids) - set(parsed.keys()))
+        extra = sorted(set(parsed.keys()) - set(expected_ids))
+        raise ValueError(
+            "LLM response ids mismatch. "
+            f"missing={missing[:5]} extra={extra[:5]}"
+        )
+
+    return [parsed.get(line_id, original_by_id[line_id]) for line_id in expected_ids]
+
+
+def _llm_correct_lines_once(
+    lines: list[str],
+    backend: str,
+    model: str | None,
+    timeout_sec: int,
+    glossary: str | None = None,
+    line_offset: int = 1,
+) -> list[str]:
+    if not lines:
+        return []
+    prompt = _build_llm_correct_prompt(lines, glossary=glossary, line_offset=line_offset)
     raw = _call_llm_cli(
         prompt=prompt,
         backend=backend,
         model=model,
         timeout_sec=timeout_sec,
     )
+    expected_ids = [line_offset + i for i in range(len(lines))]
+    original_by_id = {line_offset + i: line for i, line in enumerate(lines)}
+    return _parse_llm_corrected_lines(raw, expected_ids=expected_ids, original_by_id=original_by_id)
 
-    corrected: dict[int, str] = {}
-    for line in raw.splitlines():
-        m = re.match(r"^(\d+)\.\s*(.*)", line)
-        if m:
-            corrected[int(m.group(1))] = m.group(2)
 
-    if len(corrected) != len(lines):
-        LOG.warning(
-            "LLM returned %d lines but expected %d; falling back to original",
-            len(corrected),
-            len(lines),
+def _llm_correct_lines_chunked(
+    lines: list[str],
+    backend: str,
+    model: str | None,
+    timeout_sec: int,
+    glossary: str | None = None,
+    chunk_size: int = LLM_CORRECT_CHUNK_SIZE,
+) -> tuple[list[str], int]:
+    corrected: list[str] = []
+    failures = 0
+    total = len(lines)
+    chunk_size = max(1, chunk_size)
+    total_chunks = (total + chunk_size - 1) // chunk_size
+
+    for chunk_idx, start in enumerate(range(0, total, chunk_size), start=1):
+        end = min(start + chunk_size, total)
+        chunk = lines[start:end]
+        LOG.info(
+            "LLM correction batch %d/%d: lines %d-%d",
+            chunk_idx,
+            total_chunks,
+            start + 1,
+            end,
         )
-        return lines
+        chunk_corrected: list[str] | None = None
+        for attempt in range(1, LLM_CORRECT_MAX_RETRIES + 1):
+            try:
+                chunk_corrected = _llm_correct_lines_once(
+                    lines=chunk,
+                    backend=backend,
+                    model=model,
+                    timeout_sec=timeout_sec,
+                    glossary=glossary,
+                    line_offset=start + 1,
+                )
+                break
+            except Exception as exc:  # noqa: BLE001
+                LOG.warning(
+                    "LLM chunk failed (%s attempt %d/%d lines %d-%d): %s",
+                    backend,
+                    attempt,
+                    LLM_CORRECT_MAX_RETRIES,
+                    start + 1,
+                    end,
+                    exc,
+                )
+        if chunk_corrected is None:
+            failures += 1
+            corrected.extend(chunk)
+            continue
+        corrected.extend(chunk_corrected)
+    return corrected, failures
 
-    return [corrected.get(i + 1, lines[i]) for i in range(len(lines))]
+
+def _llm_correct_lines(
+    lines: list[str],
+    backend: str,
+    model: str | None,
+    timeout_sec: int,
+    glossary: str | None = None,
+) -> tuple[list[str], str]:
+    """Return corrected lines and status: applied|partial_applied|fallback_kept_original."""
+    if not lines:
+        return [], "applied"
+
+    for backend_name in _ordered_llm_backends(backend):
+        try:
+            corrected = _llm_correct_lines_once(
+                lines=lines,
+                backend=backend_name,
+                model=model,
+                timeout_sec=timeout_sec,
+                glossary=glossary,
+                line_offset=1,
+            )
+            LOG.info("LLM correction applied via %s in single request.", backend_name)
+            return corrected, "applied"
+        except Exception as exc:  # noqa: BLE001
+            LOG.warning(
+                "LLM single request failed (%s): %s; falling back to chunked mode.",
+                backend_name,
+                exc,
+            )
+            corrected_chunked, failures = _llm_correct_lines_chunked(
+                lines=lines,
+                backend=backend_name,
+                model=model,
+                timeout_sec=timeout_sec,
+                glossary=glossary,
+            )
+            if failures == 0:
+                LOG.info("LLM correction applied via %s in chunked mode.", backend_name)
+                return corrected_chunked, "applied"
+            if failures < max(1, (len(lines) + LLM_CORRECT_CHUNK_SIZE - 1) // LLM_CORRECT_CHUNK_SIZE):
+                LOG.warning(
+                    "LLM correction partially applied via %s; %d chunk(s) kept original.",
+                    backend_name,
+                    failures,
+                )
+                return corrected_chunked, "partial_applied"
+            LOG.warning(
+                "LLM chunked mode failed for backend %s; trying next backend.",
+                backend_name,
+            )
+
+    LOG.warning("LLM correction fallback_kept_original: all backends failed.")
+    return lines, "fallback_kept_original"
 
 
 def llm_correct_file_in_place(
@@ -455,11 +620,12 @@ def llm_correct_file_in_place(
 
     if suffix == ".txt":
         all_lines = file_path.read_text(encoding="utf-8").splitlines()
+        original_lines = list(all_lines)
         non_empty_indices = [i for i, line in enumerate(all_lines) if line.strip()]
         if not non_empty_indices:
             return
         content_lines = [all_lines[i] for i in non_empty_indices]
-        corrected_lines = _llm_correct_lines(
+        corrected_lines, status = _llm_correct_lines(
             content_lines,
             backend=backend,
             model=model,
@@ -469,7 +635,10 @@ def llm_correct_file_in_place(
         for idx, corrected in zip(non_empty_indices, corrected_lines):
             all_lines[idx] = corrected
         file_path.write_text("\n".join(all_lines), encoding="utf-8")
-        LOG.info("LLM correction applied to %s", file_path)
+        if all_lines == original_lines:
+            LOG.info("LLM correction %s with no text changes: %s", status, file_path)
+        else:
+            LOG.info("LLM correction %s: %s", status, file_path)
 
     elif suffix == ".srt":
         raw = file_path.read_text(encoding="utf-8", errors="replace").strip()
@@ -488,7 +657,7 @@ def llm_correct_file_in_place(
                 valid_block_indices.append(i)
         if not texts:
             return
-        corrected_texts = _llm_correct_lines(
+        corrected_texts, status = _llm_correct_lines(
             texts,
             backend=backend,
             model=model,
@@ -499,7 +668,7 @@ def llm_correct_file_in_place(
             block_lines = blocks[block_idx].splitlines()
             blocks[block_idx] = "\n".join(block_lines[:2] + [corrected_text])
         file_path.write_text("\n\n".join(blocks), encoding="utf-8")
-        LOG.info("LLM correction applied to %s", file_path)
+        LOG.info("LLM correction %s: %s", status, file_path)
 
     else:
         LOG.warning("LLM correct: unsupported file type %s, skipping", file_path.suffix)
@@ -649,9 +818,11 @@ def _sync_srt_text_from_txt(srt_path: Path, txt_path: Path) -> None:
             valid_block_indices.append(i)
 
     if len(txt_lines) != len(valid_block_indices):
+        srt_text_lines = _extract_srt_text_lines(srt_path)
+        detail = _format_line_mismatch_detail(srt_text_lines=srt_text_lines, txt_lines=txt_lines)
         raise RuntimeError(
             "Cannot sync TXT -> SRT: line count mismatch "
-            f"(txt={len(txt_lines)} srt={len(valid_block_indices)})."
+            f"(txt={len(txt_lines)} srt={len(valid_block_indices)}). {detail}"
         )
 
     for idx, block_idx in enumerate(valid_block_indices):
@@ -682,14 +853,27 @@ def _extract_txt_text_lines(txt_path: Path) -> list[str]:
     ]
 
 
+def _format_line_mismatch_detail(srt_text_lines: list[str], txt_lines: list[str]) -> str:
+    first_mismatch = min(len(srt_text_lines), len(txt_lines))
+    for idx in range(first_mismatch):
+        if srt_text_lines[idx] != txt_lines[idx]:
+            first_mismatch = idx
+            break
+    line_no = first_mismatch + 1
+    srt_preview = srt_text_lines[first_mismatch] if first_mismatch < len(srt_text_lines) else "<missing>"
+    txt_preview = txt_lines[first_mismatch] if first_mismatch < len(txt_lines) else "<missing>"
+    return f"first mismatch line={line_no} srt='{srt_preview}' txt='{txt_preview}'"
+
+
 def _validate_srt_txt_line_alignment(srt_path: Path, txt_path: Path) -> None:
     srt_lines = _extract_srt_text_lines(srt_path)
     txt_lines = _extract_txt_text_lines(txt_path)
     if len(srt_lines) != len(txt_lines):
+        detail = _format_line_mismatch_detail(srt_text_lines=srt_lines, txt_lines=txt_lines)
         raise RuntimeError(
             "SRT/TXT line count mismatch before postprocess step: "
             f"srt={len(srt_lines)} txt={len(txt_lines)}. "
-            "Please sync files first, or regenerate a consistent pair."
+            f"{detail}. Please sync files first, or regenerate a consistent pair."
         )
 
 
@@ -820,6 +1004,50 @@ def write_srt_txt_from_segments(output_base: Path, segments: list[dict[str, Any]
     output_base.with_suffix(".txt").write_text("\n".join(txt_lines) + "\n", encoding="utf-8")
 
 
+def _default_postprocess_state_path(srt_path: Path) -> Path:
+    return srt_path.with_suffix(".postprocess_state.json")
+
+
+def _compute_postprocess_pair_hash(srt_path: Path, txt_path: Path) -> str:
+    hasher = hashlib.sha256()
+    hasher.update(srt_path.read_bytes())
+    hasher.update(b"\n--PAIR-SEP--\n")
+    hasher.update(txt_path.read_bytes())
+    return hasher.hexdigest()
+
+
+def _read_postprocess_state(state_path: Path) -> dict[str, Any]:
+    if not state_path.exists():
+        return {}
+    try:
+        return json.loads(state_path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _write_postprocess_state(state_path: Path, state: dict[str, Any]) -> None:
+    state_path.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _selected_postprocess_steps(
+    split_on_punc: bool,
+    llm_correct: bool,
+    autocorrect: bool,
+) -> list[str]:
+    steps: list[str] = []
+    if split_on_punc:
+        steps.append("split")
+    if llm_correct:
+        steps.append("llm_correct_txt")
+        steps.append("sync_txt_to_srt")
+    if autocorrect:
+        steps.append("autocorrect")
+    return steps
+
+
 def postprocess_transcription_outputs(
     output_base: Path,
     split_on_punc: bool,
@@ -829,6 +1057,9 @@ def postprocess_transcription_outputs(
     llm_timeout_sec: int,
     llm_glossary: str | None,
     autocorrect: bool,
+    resume: bool = False,
+    from_step: str | None = None,
+    to_step: str | None = None,
 ) -> None:
     """Apply optional post-processing steps for generated transcript files."""
     postprocess_srt_txt_files(
@@ -841,6 +1072,9 @@ def postprocess_transcription_outputs(
         llm_timeout_sec=llm_timeout_sec,
         llm_glossary=llm_glossary,
         autocorrect=autocorrect,
+        resume=resume,
+        from_step=from_step,
+        to_step=to_step,
     )
 
 
@@ -854,6 +1088,9 @@ def postprocess_srt_txt_files(
     llm_timeout_sec: int,
     llm_glossary: str | None,
     autocorrect: bool,
+    resume: bool = False,
+    from_step: str | None = None,
+    to_step: str | None = None,
 ) -> None:
     """Apply optional post-processing steps to an existing SRT/TXT pair."""
     if not srt_path.is_file():
@@ -861,26 +1098,84 @@ def postprocess_srt_txt_files(
     if not txt_path.is_file():
         raise FileNotFoundError(f"TXT file not found: {txt_path}")
 
-    if split_on_punc:
-        split_lines = _split_srt_on_punctuation(srt_path)
-        _rewrite_txt_from_lines(txt_path, split_lines)
+    steps = _selected_postprocess_steps(
+        split_on_punc=split_on_punc,
+        llm_correct=llm_correct,
+        autocorrect=autocorrect,
+    )
+    if not steps:
+        return
 
-    if llm_correct or autocorrect:
-        _validate_srt_txt_line_alignment(srt_path, txt_path)
+    state_path = _default_postprocess_state_path(srt_path)
+    pair_hash = _compute_postprocess_pair_hash(srt_path, txt_path)
+    state = _read_postprocess_state(state_path) if resume else {}
+    completed_steps = [str(x) for x in state.get("completed_steps", [])]
 
-    if llm_correct:
-        llm_correct_file_in_place(
-            txt_path,
-            backend=llm_backend,
-            model=llm_model,
-            timeout_sec=llm_timeout_sec,
-            glossary=llm_glossary,
+    if resume and state and state.get("pair_hash") not in {None, pair_hash}:
+        LOG.warning(
+            "Resume requested but state hash differs from current files; starting fresh state."
         )
-        _sync_srt_text_from_txt(srt_path=srt_path, txt_path=txt_path)
+        completed_steps = []
 
-    if autocorrect:
-        autocorrect_file_in_place(txt_path)
-        autocorrect_file_in_place(srt_path)
+    selected_steps = steps
+    if from_step:
+        if from_step not in selected_steps:
+            raise ValueError(f"--from-step '{from_step}' is not part of selected postprocess steps.")
+        selected_steps = selected_steps[selected_steps.index(from_step) :]
+    if to_step:
+        if to_step not in selected_steps:
+            raise ValueError(f"--to-step '{to_step}' is not part of selected postprocess steps.")
+        selected_steps = selected_steps[: selected_steps.index(to_step) + 1]
+
+    if resume:
+        selected_steps = [step for step in selected_steps if step not in completed_steps]
+
+    state = {
+        "pair_hash": pair_hash,
+        "completed_steps": completed_steps,
+        "selected_steps": selected_steps,
+        "status": "running",
+        "last_step": completed_steps[-1] if completed_steps else None,
+    }
+    _write_postprocess_state(state_path, state)
+
+    try:
+        for step in selected_steps:
+            LOG.info("Postprocess step: %s", step)
+            if step == "split":
+                split_lines = _split_srt_on_punctuation(srt_path)
+                _rewrite_txt_from_lines(txt_path, split_lines)
+            elif step == "llm_correct_txt":
+                _validate_srt_txt_line_alignment(srt_path, txt_path)
+                llm_correct_file_in_place(
+                    txt_path,
+                    backend=llm_backend,
+                    model=llm_model,
+                    timeout_sec=llm_timeout_sec,
+                    glossary=llm_glossary,
+                )
+            elif step == "sync_txt_to_srt":
+                _validate_srt_txt_line_alignment(srt_path, txt_path)
+                _sync_srt_text_from_txt(srt_path=srt_path, txt_path=txt_path)
+            elif step == "autocorrect":
+                _validate_srt_txt_line_alignment(srt_path, txt_path)
+                autocorrect_file_in_place(txt_path)
+                autocorrect_file_in_place(srt_path)
+            else:
+                raise ValueError(f"Unknown postprocess step: {step}")
+
+            state["completed_steps"] = [*state.get("completed_steps", []), step]
+            state["last_step"] = step
+            state["pair_hash"] = _compute_postprocess_pair_hash(srt_path, txt_path)
+            _write_postprocess_state(state_path, state)
+    except Exception:  # noqa: BLE001
+        state["status"] = "failed"
+        _write_postprocess_state(state_path, state)
+        raise
+
+    state["status"] = "done"
+    state["pair_hash"] = _compute_postprocess_pair_hash(srt_path, txt_path)
+    _write_postprocess_state(state_path, state)
 
 
 def run_whisper_command(

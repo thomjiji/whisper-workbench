@@ -280,6 +280,9 @@ def cmd_postprocess(args: argparse.Namespace) -> None:
         llm_timeout_sec=args.llm_timeout_sec,
         llm_glossary=llm_glossary,
         autocorrect=args.autocorrect,
+        resume=args.resume,
+        from_step=args.from_step,
+        to_step=args.to_step,
     )
 
 
@@ -394,6 +397,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--autocorrect",
         action="store_true",
         help="Apply autocorrect to both TXT and SRT.",
+    )
+    postprocess_parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume postprocess from saved state file if present.",
+    )
+    postprocess_parser.add_argument(
+        "--from-step",
+        choices=["split", "llm_correct_txt", "sync_txt_to_srt", "autocorrect"],
+        help="Start execution from a specific postprocess step.",
+    )
+    postprocess_parser.add_argument(
+        "--to-step",
+        choices=["split", "llm_correct_txt", "sync_txt_to_srt", "autocorrect"],
+        help="Stop execution after a specific postprocess step.",
     )
     _add_llm_args(postprocess_parser)
     postprocess_parser.set_defaults(func=cmd_postprocess)
