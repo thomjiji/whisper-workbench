@@ -1,26 +1,39 @@
+#!/usr/bin/env bash
+
+# Integration verification fixtures
+INPUT="usage/geekshootjack/连接音乐Wi-Fi-杨海崧/source/杨海崧-音频_first30m.mp3"
+VERIFY_ROOT="usage/geekshootjack/连接音乐Wi-Fi-杨海崧/output/whisper_workbench/merge_main_verification"
+GLOSSARY="usage/geekshootjack/连接音乐Wi-Fi-杨海崧/docs/glossary_full.txt"
+
+# 1) oneshot_full: whisper + all postprocess in one run
 # uv run main transcribe \
-#   -i "usage/geekshootjack/连接音乐Wi-Fi-杨海崧/source/杨海崧-音频_first10m.mp3" \
-#   -o "usage/geekshootjack/连接音乐Wi-Fi-杨海崧/output/full_transcribe" \
+#   -i "$INPUT" \
+#   -o "$VERIFY_ROOT/oneshot_full" \
 #   -l zh \
 #   --backend local \
-#   --local-model turbo \
 #   --split-on-punc \
 #   --llm-correct \
 #   --llm-backend gemini \
 #   --llm-timeout-sec 600 \
-#   --no-autocorrect \
-#   --glossary-file "usage/geekshootjack/连接音乐Wi-Fi-杨海崧/docs/glossary_full.txt"
+#   --glossary-file "$GLOSSARY"
 
+# 2) transcribe_only: whisper upstream only
 # uv run main transcribe \
-#   -i "usage/geekshootjack/连接音乐Wi-Fi-杨海崧/source/杨海崧-视频_last15m.mp4" \
-#   -o "usage/geekshootjack/连接音乐Wi-Fi-杨海崧/output/whisper_workbench/full_process_1" \
+#   -i "$INPUT" \
+#   -o "$VERIFY_ROOT/transcribe_only" \
 #   -l zh \
 #   --backend local \
 #   --skip-postprocess
 
-uv run main postprocess \
-  --srt "usage/geekshootjack/连接音乐Wi-Fi-杨海崧/output/whisper_workbench/gsj-5_whisper_process/杨海崧-音频_musicmasked_zh.srt" \
-  --txt "usage/geekshootjack/连接音乐Wi-Fi-杨海崧/output/whisper_workbench/gsj-5_whisper_process/杨海崧-音频_musicmasked_zh.txt" \
-  --llm-correct \
-  --llm-backend codex \
-  --glossary-file="usage/geekshootjack/连接音乐Wi-Fi-杨海崧/docs/glossary_full.txt"
+# 3) postprocess_only: downstream only on transcribe_only artifacts
+# mkdir -p "$VERIFY_ROOT/postprocess_only"
+# cp "$VERIFY_ROOT/transcribe_only/杨海崧-音频_first30m_zh.srt" "$VERIFY_ROOT/postprocess_only/杨海崧-音频_first30m_zh.srt"
+# cp "$VERIFY_ROOT/transcribe_only/杨海崧-音频_first30m_zh.txt" "$VERIFY_ROOT/postprocess_only/杨海崧-音频_first30m_zh.txt"
+# uv run main postprocess \
+#   --srt "$VERIFY_ROOT/postprocess_only/杨海崧-音频_first30m_zh.srt" \
+#   --txt "$VERIFY_ROOT/postprocess_only/杨海崧-音频_first30m_zh.txt" \
+#   --split-on-punc \
+#   --llm-correct \
+#   --llm-backend gemini \
+#   --llm-timeout-sec 600 \
+#   --glossary-file "$GLOSSARY"

@@ -160,8 +160,8 @@ uv run python main.py doctor
 uv run python main.py doctor --backend groq
 ```
 
-`transcribe` also accepts non-WAV inputs (for example `.mp3`, `.m4a`, `.mp4`).  
-With `--backend local`, files are converted to temporary 16kHz mono WAV for whisper-cli and cleaned up after transcription.  
+`transcribe` also accepts non-WAV inputs (for example `.mp3`, `.m4a`, `.mp4`).
+With `--backend local`, files are converted to temporary 16kHz mono WAV for whisper-cli and cleaned up after transcription.
 With `--backend groq`, the original input file is uploaded directly to Groq.
 By default, generated `.txt` and `.srt` are post-processed with `autocorrect-py`.
 
@@ -252,11 +252,8 @@ Example:
 ```txt
 DeepMind
 OpenAI
-P.K.14
 PK14
 Dear Eloise
-李高特四重奏
-兵马司
 ```
 
 Not recommended:
