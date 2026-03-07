@@ -287,6 +287,16 @@ def _llm_correct_lines_chunked(
                     line_offset=start + 1,
                 )
                 break
+            except RuntimeError as exc:
+                LOG.warning(
+                    "LLM chunk backend error (%s attempt %d/2 lines %d-%d): %s",
+                    backend,
+                    attempt,
+                    start + 1,
+                    end,
+                    exc,
+                )
+                break  # no point retrying a timeout/connection failure
             except (ValueError, json.JSONDecodeError) as exc:
                 LOG.warning(
                     "LLM chunk JSON parse failed (%s attempt %d/2 lines %d-%d): %s",

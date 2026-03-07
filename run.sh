@@ -12,15 +12,15 @@
 #   --glossary-file "usage/geekshootjack/连接音乐Wi-Fi-杨海崧/docs/glossary_full.txt"
 
 # uv run main transcribe \
-#   -i "usage/geekshootjack/连接音乐Wi-Fi-杨海崧/source/杨海崧-音频_first15m.mp3" \
-#   -o "usage/geekshootjack/连接音乐Wi-Fi-杨海崧/output/whisper_workbench/skip_postprocess_2" \
+#   -i "usage/geekshootjack/连接音乐Wi-Fi-杨海崧/source/杨海崧-视频_last15m.mp4" \
+#   -o "usage/geekshootjack/连接音乐Wi-Fi-杨海崧/output/whisper_workbench/full_process_1" \
 #   -l zh \
 #   --backend local \
 #   --skip-postprocess
 
 uv run main postprocess \
-  --srt "usage/geekshootjack/连接音乐Wi-Fi-杨海崧/output/whisper_workbench/skip_postprocess_2/杨海崧-音频_first15m_zh.srt" \
-  --txt "usage/geekshootjack/连接音乐Wi-Fi-杨海崧/output/whisper_workbench/skip_postprocess_2/杨海崧-音频_first15m_zh.txt" \
+  --srt "usage/geekshootjack/连接音乐Wi-Fi-杨海崧/output/whisper_workbench/gsj-5_whisper_process/杨海崧-音频_musicmasked_zh.srt" \
+  --txt "usage/geekshootjack/连接音乐Wi-Fi-杨海崧/output/whisper_workbench/gsj-5_whisper_process/杨海崧-音频_musicmasked_zh.txt" \
   --llm-correct \
-  --llm-backend gemini \
+  --llm-backend codex \
   --glossary-file="usage/geekshootjack/连接音乐Wi-Fi-杨海崧/docs/glossary_full.txt"

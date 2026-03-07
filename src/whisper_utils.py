@@ -33,14 +33,19 @@ def _ensure_file_readable(path: Path, label: str) -> None:
 
 def _candidate_whisper_cli_paths(base_dir: Path) -> list[Path]:
     build_bin_dir = base_dir / "build" / "bin"
+    vendor_bin_dir = base_dir / "vendor" / "whisper.cpp" / "build" / "bin"
     if os.name == "nt":
         return [
             build_bin_dir / "Release" / "whisper-cli.exe",
             build_bin_dir / "RelWithDebInfo" / "whisper-cli.exe",
             build_bin_dir / "Debug" / "whisper-cli.exe",
             build_bin_dir / "whisper-cli.exe",
+            vendor_bin_dir / "Release" / "whisper-cli.exe",
+            vendor_bin_dir / "RelWithDebInfo" / "whisper-cli.exe",
+            vendor_bin_dir / "Debug" / "whisper-cli.exe",
+            vendor_bin_dir / "whisper-cli.exe",
         ]
-    return [build_bin_dir / "whisper-cli"]
+    return [build_bin_dir / "whisper-cli", vendor_bin_dir / "whisper-cli"]
 
 
 def get_whisper_cli_path() -> Path:
@@ -64,6 +69,13 @@ def get_whisper_cli_path() -> Path:
     )
 
 
+def _model_search_dirs(base_dir: Path) -> list[Path]:
+    return [
+        base_dir / "models",
+        base_dir / "vendor" / "whisper.cpp" / "models",
+    ]
+
+
 def get_model_path() -> Path:
     """Get the default Whisper model path."""
     env_path = os.environ.get("WHISPER_MODEL_PATH")
@@ -71,13 +83,14 @@ def get_model_path() -> Path:
         return Path(env_path).expanduser().resolve()
 
     base_dir = Path(__file__).resolve().parent.parent
-    default = base_dir / "models" / "ggml-large-v3-turbo.bin"
-    if default.is_file():
-        return default
+    for models_dir in _model_search_dirs(base_dir):
+        candidate = models_dir / "ggml-large-v3-turbo.bin"
+        if candidate.is_file():
+            return candidate
 
     raise FileNotFoundError(
         "Whisper model not found. Set WHISPER_MODEL_PATH or place model at "
-        f"{default}"
+        f"{base_dir / 'models' / 'ggml-large-v3-turbo.bin'}"
     )
 
 
@@ -88,13 +101,15 @@ def get_model_path_by_variant(variant: str) -> Path:
         return Path(env_path).expanduser().resolve()
 
     base_dir = Path(__file__).resolve().parent.parent
-    model_file = base_dir / "models" / f"ggml-{variant}.bin"
-    if model_file.is_file():
-        return model_file
+    for models_dir in _model_search_dirs(base_dir):
+        candidate = models_dir / f"ggml-{variant}.bin"
+        if candidate.is_file():
+            return candidate
 
     raise FileNotFoundError(
         f"Whisper model variant '{variant}' not found. "
-        f"Expected at {model_file}. Set WHISPER_MODEL_PATH to override."
+        f"Expected at {base_dir / 'models' / f'ggml-{variant}.bin'}. "
+        "Set WHISPER_MODEL_PATH to override."
     )
 
 
@@ -105,13 +120,15 @@ def get_vad_model_path() -> Path:
         return Path(env_path).expanduser().resolve()
 
     base_dir = Path(__file__).resolve().parent.parent
-    default = base_dir / "models" / "silero_vad.onnx"
-    if default.is_file():
-        return default
+    for models_dir in _model_search_dirs(base_dir):
+        for name in ("silero_vad.onnx", "ggml-silero-v5.1.2.bin", "ggml-silero-v6.2.0.bin"):
+            candidate = models_dir / name
+            if candidate.is_file():
+                return candidate
 
     raise FileNotFoundError(
         "VAD model not found. Set WHISPER_VAD_MODEL_PATH or place model at "
-        f"{default}"
+        f"{base_dir / 'models' / 'silero_vad.onnx'}"
     )
 
 
