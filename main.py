@@ -109,16 +109,10 @@ def _add_local_backend_args(parser: argparse._ActionsContainer) -> None:
         default=None,
         help="Decode preset for local backend: balanced|accuracy|legacy.",
     )
-    vad_group = parser.add_mutually_exclusive_group()
-    vad_group.add_argument(
-        "--vad",
-        action="store_true",
-        help="Enable whisper.cpp VAD for local transcription.",
-    )
-    vad_group.add_argument(
+    parser.add_argument(
         "--no-vad",
         action="store_true",
-        help="Disable whisper.cpp VAD for local transcription (default).",
+        help="Disable whisper.cpp VAD for local transcription.",
     )
 
 
@@ -178,11 +172,9 @@ def _resolve_decode_options(decode_profile: str) -> dict[str, int | float | bool
 
 
 def _resolve_local_vad_setting(args: argparse.Namespace) -> bool:
-    if getattr(args, "vad", False):
-        return True
     if getattr(args, "no_vad", False):
         return False
-    return False
+    return True
 
 
 def _validate_backend_args(args: argparse.Namespace) -> None:
@@ -193,8 +185,8 @@ def _validate_backend_args(args: argparse.Namespace) -> None:
             )
         if args.decode_profile is not None:
             raise ValueError("--decode-profile is only valid with --backend local.")
-        if getattr(args, "vad", False) or getattr(args, "no_vad", False):
-            raise ValueError("--vad/--no-vad are only valid with --backend local.")
+        if getattr(args, "no_vad", False):
+            raise ValueError("--no-vad is only valid with --backend local.")
         if not os.environ.get("GROQ_API_KEY"):
             raise RuntimeError("GROQ_API_KEY is required when using --backend groq.")
     elif args.backend == "local":
