@@ -15,6 +15,7 @@ from src.srt_utils import (
     _sync_srt_text_from_txt,
     _validate_srt_txt_line_alignment,
 )
+from src.text_normalization import normalize_year_expressions_in_txt_file
 
 LOG = logging.getLogger(__name__)
 
@@ -57,6 +58,7 @@ def _selected_postprocess_steps(
         steps.append("split")
     if llm_correct:
         steps.append("llm_correct_txt")
+    if split_on_punc or llm_correct or autocorrect:
         steps.append("sync_txt_to_srt")
     if autocorrect:
         steps.append("autocorrect")
@@ -173,6 +175,7 @@ def postprocess_srt_txt_files(
                 )
             elif step == "sync_txt_to_srt":
                 _validate_srt_txt_line_alignment(srt_path, txt_path)
+                normalize_year_expressions_in_txt_file(txt_path)
                 _sync_srt_text_from_txt(srt_path=srt_path, txt_path=txt_path)
             elif step == "autocorrect":
                 _validate_srt_txt_line_alignment(srt_path, txt_path)

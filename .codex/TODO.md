@@ -12,13 +12,10 @@
 ## Later
 - [T-001] Add robust SRT merge strategy for over-fragmented subtitle lines.
 - [T-006] Add glossary-driven homophone normalization without manual alias mapping.
+- [T-013] Unify postprocess around a single timed transcript representation instead of TXT-first.
 
 ## Blocked
 - (empty)
-
-## Recently Completed
-- [T-009] Hardened LLM correction with structured parsing + backend fallback + chunk degradation.
-- [T-010] Added resumable postprocess execution (`--resume`, `--from-step`, `--to-step`) with state persistence.
 
 ## Usage Rules
 - Keep only near-term execution items here (roughly 1-2 weeks).

@@ -172,6 +172,8 @@ def _build_llm_correct_prompt(
         "CORRECTION RULES:\n"
         "- Fix homophones and misrecognition errors (同音字与误识别纠错).\n"
         "- Normalize proper nouns (e.g. deep mind -> DeepMind, open ai -> OpenAI).\n"
+        "- When Arabic numeral years or decades are clearly abbreviated, expand them to the full form (for example 08年 -> 2008年, 9几年 -> 199几年).\n"
+        "- Do not rewrite ambiguous spoken Chinese year phrases such as 八九年 unless the context is explicit.\n"
         "- Convert Traditional Chinese to Simplified Chinese (繁体→简体).\n"
         "- Keep numbers, punctuation, non-Chinese tokens unless clearly wrong.\n\n"
     ]

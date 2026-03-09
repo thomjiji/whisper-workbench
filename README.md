@@ -10,6 +10,7 @@ Python wrapper scripts for local [whisper.cpp](https://github.com/ggerganov/whis
 - SRT and TXT subtitle output
 - Optional initial prompt injection (`--prompt-file`) for whisper-cli
 - Automatic autocorrect post-processing for generated `.txt` and `.srt` files
+- Postprocess conservatively normalizes obvious two-digit Arabic numeral years (for example `08年 -> 2008年`) before syncing text back to SRT
 
 ## Agent-Native Workflow
 
