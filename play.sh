@@ -1,8 +1,10 @@
-# mpv \
-#     usage/geekshootjack/连接音乐Wi-Fi-杨海崧/source/杨海崧-音频_musicmasked.mp4 \
-#     --sub-file="usage/geekshootjack/连接音乐Wi-Fi-杨海崧/output/full_transcribe/杨海崧-音频_musicmasked_zh.srt"
+#!/usr/bin/env bash
 
-mpv \
-    "usage/geekshootjack/连接音乐Wi-Fi-杨海崧/source/杨海崧-视频.mp4" \
-    --sub-file="usage/geekshootjack/连接音乐Wi-Fi-杨海崧/output/whisper_workbench/full_transcribe_2/杨海崧-音频_musicmasked_zh.srt"
-    --sub-font="Noto Sans"
+set -euo pipefail
+
+if [[ $# -ne 2 ]]; then
+  echo "Usage: ./play.sh <media> <subtitle>" >&2
+  exit 1
+fi
+
+mpv "$1" --sub-file="$2" --sub-font="Noto Sans"

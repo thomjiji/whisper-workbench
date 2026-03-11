@@ -11,10 +11,11 @@ from pathlib import Path
 from typing import Any
 
 LOG = logging.getLogger(__name__)
-LLM_CORRECT_CHUNK_SIZE = 150
+LLM_CORRECT_CHUNK_SIZE = 400
 LLM_CORRECT_MAX_RETRIES = 1
 LLM_CORRECT_MIN_CHUNK_SIZE = 50
 LLM_CORRECT_MAX_WORKERS = 4
+LLM_CORRECT_LARGE_CHUNK_WORKERS = 2
 
 
 def _summarize_cli_error(stderr: bytes | str | None) -> str:
@@ -172,6 +173,8 @@ def _build_llm_correct_prompt(
         "CORRECTION RULES:\n"
         "- Fix homophones and misrecognition errors (同音字与误识别纠错).\n"
         "- Normalize proper nouns (e.g. deep mind -> DeepMind, open ai -> OpenAI).\n"
+        "- When Arabic numeral years or decades are clearly abbreviated, expand them to the full form (for example 08年 -> 2008年, 9几年 -> 199几年).\n"
+        "- Do not rewrite ambiguous spoken Chinese year phrases such as 八九年 unless the context is explicit.\n"
         "- Convert Traditional Chinese to Simplified Chinese (繁体→简体).\n"
         "- Keep numbers, punctuation, non-Chinese tokens unless clearly wrong.\n\n"
     ]
@@ -265,6 +268,46 @@ def _llm_correct_lines_chunked(
         for start in range(0, total, chunk_size)
     ]
     total_chunks = len(chunk_list)
+    max_workers = min(
+        total_chunks,
+        LLM_CORRECT_LARGE_CHUNK_WORKERS
+        if chunk_size >= 400
+        else LLM_CORRECT_MAX_WORKERS,
+    ) or 1
+    LOG.info(
+        "LLM correction scheduling: chunk_size=%d total_chunks=%d max_workers=%d",
+        chunk_size,
+        total_chunks,
+        max_workers,
+    )
+
+    def degrade_chunk(
+        start: int,
+        chunk: list[str],
+        exc: Exception,
+    ) -> list[str] | None:
+        if len(chunk) <= LLM_CORRECT_MIN_CHUNK_SIZE:
+            return None
+        split_size = max(LLM_CORRECT_MIN_CHUNK_SIZE, len(chunk) // 2)
+        LOG.warning(
+            "LLM chunk degrade (%s lines %d-%d -> subchunks of %d): %s",
+            backend,
+            start + 1,
+            start + len(chunk),
+            split_size,
+            exc,
+        )
+        corrected, failures = _llm_correct_lines_chunked(
+            lines=chunk,
+            backend=backend,
+            model=model,
+            timeout_sec=timeout_sec,
+            glossary=glossary,
+            chunk_size=split_size,
+        )
+        if failures == len(range(0, len(chunk), split_size)):
+            return None
+        return corrected
 
     def process_chunk(args: tuple[int, tuple[int, int, list[str]]]) -> tuple[int, list[str] | None]:
         chunk_idx, (start, end, chunk) = args
@@ -296,7 +339,8 @@ def _llm_correct_lines_chunked(
                     end,
                     exc,
                 )
-                break  # no point retrying a timeout/connection failure
+                chunk_corrected = degrade_chunk(start, chunk, exc)
+                break
             except (ValueError, json.JSONDecodeError) as exc:
                 LOG.warning(
                     "LLM chunk JSON parse failed (%s attempt %d/2 lines %d-%d): %s",
@@ -306,10 +350,11 @@ def _llm_correct_lines_chunked(
                     end,
                     exc,
                 )
+                chunk_corrected = degrade_chunk(start, chunk, exc)
         return start, chunk_corrected
 
     results: dict[int, list[str] | None] = {}
-    with ThreadPoolExecutor(max_workers=LLM_CORRECT_MAX_WORKERS) as executor:
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         for start, result in executor.map(process_chunk, enumerate(chunk_list, start=1)):
             results[start] = result
 

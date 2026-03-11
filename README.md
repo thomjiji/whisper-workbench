@@ -10,6 +10,7 @@ Python wrapper scripts for local [whisper.cpp](https://github.com/ggerganov/whis
 - SRT and TXT subtitle output
 - Optional initial prompt injection (`--prompt-file`) for whisper-cli
 - Automatic autocorrect post-processing for generated `.txt` and `.srt` files
+- Postprocess conservatively normalizes obvious two-digit Arabic numeral years (for example `08年 -> 2008年`) before syncing text back to SRT
 
 ## Agent-Native Workflow
 
@@ -143,6 +144,9 @@ uv run python main.py transcribe -i audio.wav -o ./output -l zh --backend local 
 # Legacy preset (backward-compatible with previous default knobs)
 uv run python main.py transcribe -i audio.wav -o ./output -l zh --decode-profile legacy
 
+# Disable VAD explicitly for timing-sensitive subtitle workflows
+uv run python main.py transcribe -i audio.wav -o ./output -l zh --backend local --no-vad
+
 # Split subtitle lines on punctuation (useful for Chinese readability)
 uv run python main.py transcribe -i audio.wav -o ./output -l zh --split-on-punc
 
@@ -269,6 +273,7 @@ DeepMind: deep mind, deepmind
 - `--decode-profile balanced` (default local profile): practical speed/quality.
 - `--decode-profile accuracy` (local): slower settings for difficult proper nouns.
 - `--decode-profile legacy` (local): old compatible knobs (`-t 8 -sow --beam-size 5 --entropy-thold 2.8 --max-context 64`).
+- Local VAD defaults to on for silence trimming and anti-hallucination; use `--no-vad` when subtitle timing fidelity matters more than aggressive speech-only decoding.
 - `--split-on-punc`: split generated SRT lines by punctuation, re-assign timings, and rewrite TXT to one line per SRT segment (for easy 1:1 mapping).
 - `balanced`/`accuracy` now also apply a bounded context window to reduce long-range repetition.
 
