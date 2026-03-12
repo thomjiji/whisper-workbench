@@ -12,5 +12,5 @@ Read order:
 Local notes:
 
 - `tasks/lessons.md` stores reusable lessons from past corrections.
-- `.codex/HANDOFF.md` is optional scratch context, not a backlog.
-- `.codex/TASKS.md`, `.codex/TODO.md`, and `.codex/ISSUES.md` were intentionally removed after migrating planning to GitHub.
+- `CLAUDE.md` should be a symlink to `AGENTS.md` so tool-specific entry points stay aligned.
+- The old `.codex/` markdown workflow files were intentionally removed after migrating planning to GitHub.

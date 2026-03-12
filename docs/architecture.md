@@ -102,11 +102,8 @@ whisper-workbench/
 ├── src/
 ├── tests/
 ├── usage/
-├── tasks/
-│   └── lessons.md
-└── .codex/
-    ├── AGENTS.md
-    └── HANDOFF.md
+└── tasks/
+    └── lessons.md
 ```
 
 ## Documentation Ownership

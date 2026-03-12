@@ -13,10 +13,8 @@ Do not recreate `.codex/TASKS.md`, `.codex/TODO.md`, or `.codex/ISSUES.md`.
 ## Local Context Files
 
 - `AGENTS.md`: short entry point for agent tooling
-- `.codex/AGENTS.md`: compatibility pointer for tools that already look there
-- `CLAUDE.md`: Claude-specific entry pointing back into this doc set
+- `CLAUDE.md`: symlink to `AGENTS.md` for tool compatibility
 - `tasks/lessons.md`: lessons learned from user corrections
-- `.codex/HANDOFF.md`: optional temporary handoff context
 
 These files provide guidance. They are not project management artifacts.
 
