@@ -41,7 +41,7 @@ uv run main transcribe -i input.mp4 -o ./output -l zh --backend local --no-vad
 - [Docs Index](./docs/README.md)
 - [CLI Guide](./docs/cli.md)
 - [Architecture](./docs/architecture.md)
-- [Agent Workflow](./docs/agent-workflow.md)
+- [Agentic Dev Process](./AGENTS.md)
 
 ## Project Tracking
 

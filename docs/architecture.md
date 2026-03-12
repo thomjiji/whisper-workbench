@@ -94,9 +94,10 @@ whisper-workbench/
 ├── README.md
 ├── docs/
 │   ├── README.md
-│   ├── agent-workflow.md
 │   ├── architecture.md
-│   └── cli.md
+│   ├── cli.md
+│   └── plans/
+│       └── README.md
 ├── main.py
 ├── scripts/
 ├── src/
@@ -111,4 +112,5 @@ whisper-workbench/
 - Root `README.md`: short human-facing TLDR only
 - `docs/cli.md`: operational usage details and flags
 - `docs/architecture.md`: implementation map and invariants
-- `docs/agent-workflow.md`: collaboration process for humans and agents
+- `AGENTS.md`: canonical agentic development process
+- `docs/plans/*.md`: reviewed implementation plans for non-trivial issues
