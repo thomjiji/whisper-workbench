@@ -90,6 +90,71 @@ def find_whisper_cli(whisper_cpp_dir: Path) -> Path:
     return candidates[0]
 
 
+def _load_cmake_cache_entries(cache_path: Path) -> dict[str, str]:
+    entries: dict[str, str] = {}
+    if not cache_path.is_file():
+        return entries
+
+    for raw_line in cache_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("//") or line.startswith("#"):
+            continue
+        key_with_type, sep, value = line.partition("=")
+        if not sep or ":" not in key_with_type:
+            continue
+        key, _, _entry_type = key_with_type.partition(":")
+        entries[key] = value
+
+    return entries
+
+
+def _normalized_path_string(path: Path | str) -> str:
+    return os.path.normcase(
+        os.path.normpath(str(Path(path).expanduser().resolve(strict=False)))
+    )
+
+
+def get_stale_cmake_cache_reason(source_dir: Path, build_dir: Path) -> str | None:
+    cache_path = build_dir / "CMakeCache.txt"
+    entries = _load_cmake_cache_entries(cache_path)
+    if not entries:
+        return None
+
+    expected_paths = {
+        "CMAKE_HOME_DIRECTORY": source_dir,
+        "CMAKE_CACHEFILE_DIR": build_dir,
+    }
+    mismatches: list[str] = []
+    for key, expected_path in expected_paths.items():
+        cached_value = entries.get(key)
+        if not cached_value:
+            continue
+        if _normalized_path_string(cached_value) != _normalized_path_string(expected_path):
+            mismatches.append(
+                f"{key} cached={cached_value} expected={expected_path}"
+            )
+
+    if not mismatches:
+        return None
+
+    return "; ".join(mismatches)
+
+
+def prepare_build_dir(whisper_cpp_dir: Path) -> None:
+    build_dir = whisper_cpp_dir / "build"
+    stale_reason = get_stale_cmake_cache_reason(
+        source_dir=whisper_cpp_dir,
+        build_dir=build_dir,
+    )
+    if stale_reason is None:
+        return
+
+    print("==> Detected stale CMake cache from a previous repo path.")
+    print(f"==> Removing {build_dir} and rebuilding whisper.cpp...")
+    print(f"==> Stale cache details: {stale_reason}")
+    shutil.rmtree(build_dir)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Set up whisper.cpp (clone/update/build/download model)."
@@ -161,6 +226,7 @@ def main() -> int:
         print("==> whisper.cpp already cloned, skipping update")
 
     print("==> Building whisper.cpp...")
+    prepare_build_dir(whisper_cpp_dir)
     run(["cmake", "-B", "build"], cwd=whisper_cpp_dir)
     run(["cmake", "--build", "build", "--config", "Release"], cwd=whisper_cpp_dir)
 
