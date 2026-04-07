@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-DEFAULT_GLOSSARY="usage/geekshootjack/连接音乐Wi-Fi-杨海崧/docs/glossary_full.txt"
+DEFAULT_GLOSSARY="usage/geekshootjack/连接音乐Wi-Fi/杨海崧/docs/glossary.txt"
 
 usage() {
   cat <<'EOF'
@@ -34,6 +34,7 @@ case "$MODE" in
       -o "$OUTPUT_PATH" \
       -l zh \
       --backend local \
+      --local-model large-v3 \
       --llm-correct \
       --llm-backend codex \
       --llm-timeout-sec 600 \
